@@ -69,6 +69,10 @@ local function findReturnedChapterItemNumber(chapters, context)
     return nil
 end
 
+local function hasSourceId(source)
+    return type(source) == "table" and source.id ~= nil and tostring(source.id):match("%S") ~= nil
+end
+
 local function copyOptions(options)
     local copied = {}
     for key, value in pairs(options or {}) do
@@ -76,6 +80,36 @@ local function copyOptions(options)
     end
     return copied
 end
+
+function Methods:buildReaderReturnCloseTarget(_reader, manga)
+    if type(manga) ~= "table" then
+        return nil
+    end
+    if manga.in_library == true then
+        return { kind = "library" }
+    end
+    if hasSourceId(manga.source) then
+        return { kind = "source", source = manga.source }
+    end
+    return nil
+end
+
+function Methods:openReaderReturnCloseTarget(target)
+    if type(target) ~= "table" then
+        return nil
+    end
+    if target.kind == "library" and self.showLibrary then
+        return self:showLibrary()
+    end
+    if target.kind == "source" and hasSourceId(target.source) then
+        local client = self.getClient and self:getClient() or nil
+        if client and client.showSourceModeMenu then
+            return client:showSourceModeMenu(target.source)
+        end
+    end
+    return nil
+end
+
 
 function Methods:attachSourceToManga(manga, source)
     return self:getClient():attachSourceToManga(manga, source)
@@ -308,10 +342,18 @@ function Methods:showChapterResultForManga(manga, result, options)
     local chapter_menu
     self.current_chapter_options = self:buildChapterMenuOptions(manga, chapters)
     self.current_chapter_options.itemnumber = findReturnedChapterItemNumber(chapters, options.return_context)
+    local reader_return_close_target = options.reader_return_close_target
     self.current_chapter_options.close_callback = function()
         local is_current_menu = self.current_chapter_menu == chapter_menu
         if is_current_menu then
             self.current_chapter_menu = nil
+        end
+        if is_current_menu
+            and not self.suwayomi_plugin_closing
+            and reader_return_close_target
+            and self.openReaderReturnCloseTarget
+        then
+            return self:openReaderReturnCloseTarget(reader_return_close_target)
         end
         return nil
     end
@@ -323,6 +365,9 @@ function Methods:showChapterResultForManga(manga, result, options)
     self.current_chapter_menu = chapter_menu
     if self.trackSuwayomiScreen then
         self:trackSuwayomiScreen("chapters", chapter_menu)
+    end
+    if self.applyMangaKeepNextUnreadDownloadsPolicy then
+        self:applyMangaKeepNextUnreadDownloadsPolicy(manga)
     end
     return true
 end
@@ -547,6 +592,47 @@ function Methods:performMangaAction(manga, action_id, options)
     if action_id == "remove_from_library" then
         return self:confirmRemoveMangaFromLibrary(manga, options)
     end
+    if action_id == "more" then
+        self:showBulkDownloadMangaActions(manga, options)
+        return true
+    end
+    if action_id == "bulk_downloads" then
+        self:showBulkDownloadMangaActions(manga, options)
+        return true
+    end
+    if action_id == "keep_downloaded" then
+        self:showKeepDownloadedMangaActions(manga, options)
+        return true
+    end
+    if action_id == "download_first_unread" then
+        return self:downloadNextUnreadChaptersForManga(manga, 1, false)
+    end
+    local next_unread_count = tostring(action_id or ""):match("^download_next_(%d+)_unread$")
+    if next_unread_count then
+        local limit = tonumber(next_unread_count)
+        return self:downloadNextUnreadChaptersForManga(manga, limit, limit >= 50)
+    end
+    if action_id == "download_all_unread" then
+        return self:confirmDownloadAllUnreadChaptersForManga(manga)
+    end
+    if action_id == "download_all_chapters" then
+        return self:confirmDownloadAllChaptersForManga(manga)
+    end
+    local keep_unread_count = tostring(action_id or ""):match("^keep_next_(%d+)_unread$")
+    if keep_unread_count then
+        local limit = tonumber(keep_unread_count)
+        if limit == 0 then
+            SuwayomiSettings:saveMangaKeepNextUnreadDownloads(manga, 0)
+            return true
+        end
+        return self:keepNextUnreadChaptersForManga(manga, limit)
+    end
+    if action_id == "delete_read_downloaded" then
+        self:withMangaChapterContext(manga, function()
+            self:confirmDeleteReadChaptersFromDevice()
+        end)
+        return true
+    end
     if action_id == "trackers" then
         if self.showMangaTrackers then
             return self:showMangaTrackers(manga)
@@ -554,6 +640,256 @@ function Methods:performMangaAction(manga, action_id, options)
         return false
     end
     return false
+end
+
+
+function Methods:showMoreMangaActions(manga, options)
+    return self:showBulkDownloadMangaActions(manga, options)
+end
+
+
+function Methods:showBulkDownloadMangaActions(manga, options)
+    options = options or {}
+    if not SuwayomiUI.showMangaActionsMenu then
+        return false
+    end
+    local menu = SuwayomiUI.showMangaActionsMenu({
+        title = I18n.t("Bulk downloads"),
+        actions = MangaActionMenu.buildBulkDownloadActions(),
+        on_back = function()
+            self:showMangaActions(manga, options)
+        end,
+    }, function(action)
+        if action then
+            self:performMangaAction(manga, action.id, options)
+        end
+    end)
+    if self.trackSuwayomiScreen then
+        self:trackSuwayomiScreen("manga-actions", menu)
+    end
+    return menu
+end
+
+
+function Methods:showKeepDownloadedMangaActions(manga, options)
+    options = options or {}
+    if not SuwayomiUI.showMangaActionsMenu then
+        return false
+    end
+    local menu = SuwayomiUI.showMangaActionsMenu({
+        title = I18n.t("Download ahead"),
+        actions = MangaActionMenu.buildKeepDownloadedActions(),
+        on_back = function()
+            self:showMangaActions(manga, options)
+        end,
+    }, function(action)
+        if action then
+            self:performMangaAction(manga, action.id, options)
+        end
+    end)
+    if self.trackSuwayomiScreen then
+        self:trackSuwayomiScreen("manga-actions", menu)
+    end
+    return menu
+end
+
+
+function Methods:downloadNextUnreadChaptersForManga(manga, limit, confirm)
+    local function queue(download_directory)
+        local chapters = self:getNextUnreadChaptersForDownload(manga, limit)
+        if #chapters == 0 then
+            self:showMessage(I18n.t("No unread chapters available to download."))
+            return 0
+        end
+
+        if confirm then
+            return self:showBulkActionConfirmation(
+                I18n.count(
+                    #chapters,
+                    "Queue %1 unread chapter download?",
+                    "Queue %1 unread chapter downloads?"
+                ),
+                I18n.t("Queue"),
+                function()
+                    self:enqueueSelectedChapterDownloads(manga, chapters, download_directory)
+                end
+            )
+        end
+
+        return self:enqueueSelectedChapterDownloads(manga, chapters, download_directory)
+    end
+
+    local function queueAfterContext(download_directory)
+        return self:withMangaChapterContext(manga, function()
+            queue(download_directory)
+        end)
+    end
+
+    local download_directory = self:getDownloadDirectoryOrChoose(queueAfterContext)
+    if not download_directory then
+        return true
+    end
+    return queueAfterContext(download_directory)
+end
+
+
+function Methods:confirmDownloadAllUnreadChaptersForManga(manga)
+    local function queue(download_directory)
+        local chapters = self:getUnreadChaptersForManga(manga)
+        if #chapters == 0 then
+            self:showMessage(I18n.t("No unread chapters available to download."))
+            return 0
+        end
+
+        return self:showBulkActionConfirmation(
+            I18n.count(
+                #chapters,
+                "Queue downloads for all %1 unread chapter?",
+                "Queue downloads for all %1 unread chapters?"
+            ),
+            I18n.t("Queue"),
+            function()
+                self:enqueueSelectedChapterDownloads(manga, chapters, download_directory)
+            end
+        )
+    end
+
+    local function queueAfterContext(download_directory)
+        return self:withMangaChapterContext(manga, function()
+            queue(download_directory)
+        end)
+    end
+
+    local download_directory = self:getDownloadDirectoryOrChoose(queueAfterContext)
+    if not download_directory then
+        return true
+    end
+    return queueAfterContext(download_directory)
+end
+
+
+function Methods:confirmDownloadAllChaptersForManga(manga)
+    local function queue(download_directory)
+        local chapters = self:getAllChaptersForManga(manga)
+        if #chapters == 0 then
+            self:showMessage(I18n.t("This manga has no chapters."))
+            return 0
+        end
+
+        return self:showBulkActionConfirmation(
+            I18n.count(
+                #chapters,
+                "Queue downloads for all %1 chapter?",
+                "Queue downloads for all %1 chapters?"
+            ),
+            I18n.t("Queue"),
+            function()
+                self:enqueueSelectedChapterDownloads(manga, chapters, download_directory)
+            end
+        )
+    end
+
+    local function queueAfterContext(download_directory)
+        return self:withMangaChapterContext(manga, function()
+            queue(download_directory)
+        end)
+    end
+
+    local download_directory = self:getDownloadDirectoryOrChoose(queueAfterContext)
+    if not download_directory then
+        return true
+    end
+    return queueAfterContext(download_directory)
+end
+
+
+function Methods:confirmKeepNextUnreadChaptersDownloaded(limit)
+    if not self.current_chapter_context then
+        return 0
+    end
+
+    local manga = self.current_chapter_context.manga
+    local requested_limit = SuwayomiSettings:normalizeMangaKeepNextUnreadDownloads(limit)
+    if requested_limit <= 0 then
+        return 0
+    end
+
+    local download_directory = self:getDownloadDirectoryOrChoose(function()
+            self:confirmKeepNextUnreadChaptersDownloaded(requested_limit)
+    end)
+    if not download_directory then
+        return 0
+    end
+
+    local chapters = self:getUnreadDownloadBufferCandidates(manga, requested_limit)
+    if #chapters == 0 then
+        SuwayomiSettings:saveMangaKeepNextUnreadDownloads(manga, requested_limit)
+        self:showMessage(I18n.t("Download-ahead buffer is already downloaded or queued."))
+        return 0
+    end
+
+    return self:showBulkActionConfirmation(
+        I18n.nf(
+            #chapters,
+            "Queue %1 missing download to keep the next %2 unread chapters available?",
+            "Queue %1 missing downloads to keep the next %2 unread chapters available?",
+            #chapters,
+            requested_limit
+        ),
+        I18n.t("Queue"),
+        function()
+            SuwayomiSettings:saveMangaKeepNextUnreadDownloads(manga, requested_limit)
+            self:enqueueSelectedChapterDownloads(manga, chapters, download_directory)
+        end
+    )
+end
+
+
+function Methods:keepNextUnreadChaptersForManga(manga, limit)
+    local requested_limit = SuwayomiSettings:normalizeMangaKeepNextUnreadDownloads(limit)
+    if requested_limit <= 0 then
+        return true
+    end
+
+    local function queue(download_directory)
+        local chapters = self:getUnreadDownloadBufferCandidates(manga, requested_limit)
+        if requested_limit >= 50 and #chapters > 0 then
+            return self:showBulkActionConfirmation(
+                I18n.nf(
+                    #chapters,
+                    "Queue %1 missing download to keep the next %2 unread chapters available?",
+                    "Queue %1 missing downloads to keep the next %2 unread chapters available?",
+                    #chapters,
+                    requested_limit
+                ),
+                I18n.t("Queue"),
+                function()
+                    SuwayomiSettings:saveMangaKeepNextUnreadDownloads(manga, requested_limit)
+                    self:enqueueSelectedChapterDownloads(manga, chapters, download_directory)
+                end
+            )
+        end
+
+        SuwayomiSettings:saveMangaKeepNextUnreadDownloads(manga, requested_limit)
+        if #chapters == 0 then
+            self:showMessage(I18n.t("Download-ahead buffer is already downloaded or queued."))
+            return 0
+        end
+
+        return self:enqueueSelectedChapterDownloads(manga, chapters, download_directory)
+    end
+
+    local function queueAfterContext(download_directory)
+        return self:withMangaChapterContext(manga, function()
+            queue(download_directory)
+        end)
+    end
+
+    local download_directory = self:getDownloadDirectoryOrChoose(queueAfterContext)
+    if not download_directory then
+        return true
+    end
+    return queueAfterContext(download_directory)
 end
 
 
