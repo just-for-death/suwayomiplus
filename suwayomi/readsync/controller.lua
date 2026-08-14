@@ -286,8 +286,59 @@ function Methods:syncReadStateNow()
 end
 
 
+function Methods:onPageUpdate(page)
+    local path = self:getCurrentReaderDocumentPath()
+    if not path or path == "" then return end
+    local context = self:getReaderReturnContextForPath(path)
+    if not context or not context.manga_id or not context.chapter_id then return end
+
+    page = math.floor(tonumber(page) or 1)
+    local server_page = math.max(0, page - 1)
+
+    local manga = { id = tostring(context.manga_id), title = context.manga_title or "" }
+    local chapter = { id = tostring(context.chapter_id), name = context.chapter_name or "" }
+
+    if self.updateChapterProgress then
+        self:updateChapterProgress(manga, chapter, server_page)
+    end
+end
+
+
 function Methods:onCloseDocument()
-    -- No-op: reading is online-streamed, so document close has nothing to sync here.
+    local path = self:getCurrentReaderDocumentPath()
+    if not path or path == "" then return end
+    local context = self:getReaderReturnContextForPath(path)
+    if not context or not context.manga_id or not context.chapter_id then return end
+
+    local page = 1
+    if self.ui and self.ui.paging then
+        page = self.ui.paging.current or 1
+    elseif self.ui and self.ui.doc_settings and self.ui.doc_settings.readSetting then
+        page = self.ui.doc_settings:readSetting("page") or 1
+    end
+
+    page = math.floor(tonumber(page) or 1)
+    local server_page = math.max(0, page - 1)
+
+    local manga = { id = tostring(context.manga_id), title = context.manga_title or "" }
+    local chapter = { id = tostring(context.chapter_id), name = context.chapter_name or "" }
+
+    local is_finished = false
+    if self.isCurrentDocumentFinished and self:isCurrentDocumentFinished() then
+        is_finished = true
+    elseif self.isChapterPathFinishedInKoreader and self:isChapterPathFinishedInKoreader(path) then
+        is_finished = true
+    end
+
+    if is_finished and self.markChapterRead then
+        self:markChapterRead(manga, chapter)
+    elseif self.updateChapterProgress then
+        self:updateChapterProgress(manga, chapter, server_page)
+    end
+
+    if self.schedulePendingReadSync then
+        self:schedulePendingReadSync(nil, 0)
+    end
 end
 
 
