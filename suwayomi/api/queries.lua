@@ -314,7 +314,6 @@ function Queries._buildUpdatesQuery(first, library_filter, include_progress)
 end
 
 function Queries._buildUpdateChapterReadMutation(chapter_id, is_read)
-    local now_ms = tostring(os.time() * 1000)
     return json.encode({
         query = "mutation UPDATE_CHAPTER_READ($input: UpdateChapterInput!) { updateChapter(input: $input) { chapter { id isRead lastReadAt } } }",
         variables = {
@@ -322,7 +321,7 @@ function Queries._buildUpdateChapterReadMutation(chapter_id, is_read)
                 id = tonumber(chapter_id) or chapter_id,
                 patch = {
                     isRead = is_read == true,
-                    lastReadAt = now_ms,
+                    lastPageRead = 1,
                 },
             },
         },
@@ -330,7 +329,7 @@ function Queries._buildUpdateChapterReadMutation(chapter_id, is_read)
 end
 
 function Queries._buildUpdateChapterProgressMutation(chapter_id, is_read, last_page_read)
-    local now_ms = tostring(os.time() * 1000)
+    local page_num = math.max(1, math.floor(tonumber(last_page_read) or 1))
     return json.encode({
         query = "mutation UPDATE_CHAPTER_PROGRESS($input: UpdateChapterInput!) { updateChapter(input: $input) { chapter { id isRead lastPageRead lastReadAt } } }",
         variables = {
@@ -338,8 +337,7 @@ function Queries._buildUpdateChapterProgressMutation(chapter_id, is_read, last_p
                 id = tonumber(chapter_id) or chapter_id,
                 patch = {
                     isRead = is_read == true,
-                    lastPageRead = math.max(0, math.floor(tonumber(last_page_read) or 0)),
-                    lastReadAt = now_ms,
+                    lastPageRead = page_num,
                 },
             },
         },
