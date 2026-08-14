@@ -422,11 +422,13 @@ end
 
 function ListRows.buildChapterRow(chapter, options)
     options = options or {}
+    local is_read = (type(chapter) == "table" and chapter.is_read == true)
     return {
         text = ListRows.getChapterTitle(chapter),
         subtitle = ListRows.getChapterSubtitle(chapter),
         mandatory = ListRows.getChapterMandatory(chapter),
-        title_bold = true,
+        title_bold = not is_read,
+        dimmed = is_read,
         chapter = chapter,
         callback = function()
             if options.on_select then

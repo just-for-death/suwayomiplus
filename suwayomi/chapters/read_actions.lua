@@ -49,7 +49,7 @@ function Methods:updateChapterProgress(manga, chapter, last_page_read)
             break
         end
     end
-    self:schedulePendingReadSync()
+    self:schedulePendingReadSync(nil, 0)
     return true
 end
 
@@ -88,7 +88,7 @@ function Methods:markChapterRead(manga, chapter, options)
         self:refreshChapterMenu()
     end
     if not options.skip_schedule then
-        self:schedulePendingReadSync()
+        self:schedulePendingReadSync(nil, 0)
         if manga and self.syncMangaTrackProgress then
             self:syncMangaTrackProgress(manga)
         end
