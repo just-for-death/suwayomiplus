@@ -37,14 +37,13 @@ local query_exports = {
     "_buildChapterQuery",
     "_buildChapterPagesQuery",
     "_buildStoredChapterQuery",
+    "_buildHistoryQuery",
+    "_buildUpdatesQuery",
     "_buildUpdateChapterReadMutation",
+    "_buildUpdateChapterProgressMutation",
     "_buildUpdateChaptersReadMutation",
     "_buildMarkChapterReadMutation",
     "_buildMarkChapterUnreadMutation",
-    "_buildFetchExtensionsMutation",
-    "_buildLegacyFetchExtensionsMutation",
-    "_buildUpdateExtensionMutation",
-    "_buildLegacyUpdateExtensionMutation",
     "_buildSourceMetadataQuery",
     "_buildSetSourceSavedSearchesMutation",
     "_buildTrackersQuery",
@@ -63,8 +62,6 @@ local parser_exports = {
     "parseSetSourceMetasResponse",
     "isSourceMetadataFieldError",
     "isOptionalMangaMetadataFieldError",
-    "parseExtensionsResponse",
-    "parseUpdateExtensionResponse",
     "parseMangaResponse",
     "parseLibraryMangaResponse",
     "parseMangaByIdResponse",
@@ -74,6 +71,7 @@ local parser_exports = {
     "parseChapterResponse",
     "parseChapterPagesResponse",
     "parseStoredChapterResponse",
+    "parseChapterFeedResponse",
     "parseMarkChapterReadResponse",
     "parseMarkChaptersReadResponse",
     "parseTrackersResponse",
@@ -89,7 +87,6 @@ local transport_exports = {
     "buildRequestHeaders",
     "buildGraphQLEndpoint",
     "buildRequestURL",
-    "buildChapterArchiveDownloadURL",
 }
 
 for _, name in ipairs(query_exports) do
@@ -158,62 +155,6 @@ function SuwayomiAPI.fetchSources(credentials)
     return {
         ok = true,
         sources = sources,
-    }
-end
-
-function SuwayomiAPI.fetchExtensions(credentials)
-    local result = performGraphQLRequest(credentials, SuwayomiAPI._buildFetchExtensionsMutation(), "fetchExtensions")
-    if not result.ok then
-        return result
-    end
-    if parsers.isOptionalExtensionMetadataFieldError(result.response_body) then
-        logDebugEvent({ operation = "fetchExtensions", event = "legacy_extension_query_retry" })
-        result = performGraphQLRequest(credentials, SuwayomiAPI._buildLegacyFetchExtensionsMutation(), "fetchExtensions")
-        if not result.ok then
-            return result
-        end
-    end
-
-    local extensions, parse_error = SuwayomiAPI.parseExtensionsResponse(result.response_body)
-    if not extensions then
-        logDebugEvent({ operation = "fetchExtensions", event = "parse_error", error = parse_error })
-        return {
-            ok = false,
-            error = parse_error,
-        }
-    end
-
-    return {
-        ok = true,
-        extensions = extensions,
-    }
-end
-
-function SuwayomiAPI.updateExtension(credentials, pkg_name, action)
-    local result = performGraphQLRequest(credentials, SuwayomiAPI._buildUpdateExtensionMutation(pkg_name, action), "updateExtension")
-    if not result.ok then
-        return result
-    end
-    if parsers.isOptionalExtensionMetadataFieldError(result.response_body) then
-        logDebugEvent({ operation = "updateExtension", event = "legacy_extension_query_retry" })
-        result = performGraphQLRequest(credentials, SuwayomiAPI._buildLegacyUpdateExtensionMutation(pkg_name, action), "updateExtension")
-        if not result.ok then
-            return result
-        end
-    end
-
-    local extension, parse_error = SuwayomiAPI.parseUpdateExtensionResponse(result.response_body)
-    if not extension then
-        logDebugEvent({ operation = "updateExtension", event = "parse_error", error = parse_error })
-        return {
-            ok = false,
-            error = parse_error,
-        }
-    end
-
-    return {
-        ok = true,
-        extension = extension,
     }
 end
 
@@ -493,10 +434,6 @@ function SuwayomiAPI.downloadBinary(credentials, page_url, options)
     return transport.downloadBinary(credentials, page_url, logDebugEvent, options)
 end
 
-function SuwayomiAPI.downloadChapterArchive(credentials, chapter_id, target_path, options)
-    return transport.downloadChapterArchive(credentials, chapter_id, target_path, logDebugEvent, options)
-end
-
 function SuwayomiAPI.queryChaptersForManga(credentials, manga_id)
     local result = performGraphQLRequest(credentials, SuwayomiAPI._buildStoredChapterQuery(manga_id), "queryChaptersForManga")
     if not result.ok then
@@ -518,6 +455,55 @@ function SuwayomiAPI.queryChaptersForManga(credentials, manga_id)
     }
 end
 
+local function fetchChapterFeed(credentials, kind, first)
+    local library_filter = kind == "updates"
+    local include_progress = true
+    local entries
+    local parse_error
+    for _attempt = 1, 3 do
+        local request_body = kind == "history"
+            and SuwayomiAPI._buildHistoryQuery(first, include_progress)
+            or SuwayomiAPI._buildUpdatesQuery(first, library_filter, include_progress)
+        local result = performGraphQLRequest(credentials, request_body, "fetch" .. kind)
+        if not result.ok then
+            return result
+        end
+        entries, parse_error = SuwayomiAPI.parseChapterFeedResponse(result.response_body)
+        if entries then
+            break
+        end
+        local message = tostring(parse_error or "")
+        if include_progress and message:match("lastPageRead") then
+            include_progress = false
+        elseif kind == "updates" and library_filter and message:match("inLibrary") then
+            library_filter = false
+        else
+            break
+        end
+    end
+    if entries and kind == "updates" and not library_filter then
+        local library_entries = {}
+        for _, entry in ipairs(entries) do
+            if entry.manga and entry.manga.in_library == true then
+                table.insert(library_entries, entry)
+            end
+        end
+        entries = library_entries
+    end
+    if not entries then
+        return { ok = false, error = parse_error }
+    end
+    return { ok = true, entries = entries }
+end
+
+function SuwayomiAPI.fetchHistory(credentials, first)
+    return fetchChapterFeed(credentials, "history", first)
+end
+
+function SuwayomiAPI.fetchUpdates(credentials, first)
+    return fetchChapterFeed(credentials, "updates", first)
+end
+
 function SuwayomiAPI.markChapterRead(credentials, chapter_id)
     local result = performGraphQLRequest(credentials, SuwayomiAPI._buildMarkChapterReadMutation(chapter_id), "markChapterRead")
     if not result.ok then
@@ -537,6 +523,22 @@ function SuwayomiAPI.markChapterRead(credentials, chapter_id)
         ok = true,
         chapter = chapter,
     }
+end
+
+function SuwayomiAPI.markChapterProgress(credentials, chapter_id, is_read, last_page_read)
+    local result = performGraphQLRequest(
+        credentials,
+        SuwayomiAPI._buildUpdateChapterProgressMutation(chapter_id, is_read, last_page_read),
+        "markChapterProgress"
+    )
+    if not result.ok then
+        return result
+    end
+    local chapter, parse_error = SuwayomiAPI.parseMarkChapterReadResponse(result.response_body)
+    if not chapter then
+        return { ok = false, error = parse_error }
+    end
+    return { ok = true, chapter = chapter }
 end
 
 function SuwayomiAPI.markChapterUnread(credentials, chapter_id)

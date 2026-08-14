@@ -18,8 +18,6 @@ local function normalizeNumber(value, fallback)
     return fallback
 end
 
-local EXTENSION_FIELDS = "pkgName name lang versionName versionCode isNsfw isInstalled hasUpdate isObsolete iconUrl apkName repo"
-local LEGACY_EXTENSION_FIELDS = "pkgName name lang versionName versionCode isNsfw isInstalled hasUpdate isObsolete"
 local LEGACY_MANGA_FIELDS = "id title inLibrary initialized thumbnailUrl"
 local LEGACY_REFRESH_MANGA_FIELDS = "id title initialized thumbnailUrl"
 local MANGA_FIELDS = "id title author artist description genre status inLibrary initialized thumbnailUrl"
@@ -102,47 +100,6 @@ function Queries._buildSetSourceSavedSearchesMutation(source_id, saved_searches_
     })
 end
 
-function Queries._buildFetchExtensionsMutation()
-    return json.encode({
-        query = "mutation FETCH_EXTENSIONS { fetchExtensions(input: {}) { extensions { " .. EXTENSION_FIELDS .. " } } }",
-    })
-end
-
-function Queries._buildLegacyFetchExtensionsMutation()
-    return json.encode({
-        query = "mutation FETCH_EXTENSIONS { fetchExtensions(input: {}) { extensions { " .. LEGACY_EXTENSION_FIELDS .. " } } }",
-    })
-end
-
-local function buildUpdateExtensionMutation(pkg_name, action, fields)
-    local patch = {}
-    if action == "install" then
-        patch.install = true
-    elseif action == "update" then
-        patch.update = true
-    elseif action == "uninstall" then
-        patch.uninstall = true
-    end
-
-    return json.encode({
-        query = "mutation UPDATE_EXTENSION($input: UpdateExtensionInput!) { updateExtension(input: $input) { extension { " .. fields .. " } } }",
-        variables = {
-            input = {
-                id = tostring(pkg_name or ""),
-                patch = patch,
-            },
-        },
-    })
-end
-
-function Queries._buildUpdateExtensionMutation(pkg_name, action)
-    return buildUpdateExtensionMutation(pkg_name, action, EXTENSION_FIELDS)
-end
-
-function Queries._buildLegacyUpdateExtensionMutation(pkg_name, action)
-    return buildUpdateExtensionMutation(pkg_name, action, LEGACY_EXTENSION_FIELDS)
-end
-
 local function buildMangaQuery(options, fields)
     options = options or {}
     local input = {
@@ -193,7 +150,7 @@ local function buildLibraryMangaQuery(options, fields)
     return json.encode({
         query = "query GET_LIBRARY_MANGAS($filter: MangaFilterInput, $first: Int, $offset: Int, $order: [MangaOrderInput!]) { mangas(filter: $filter, first: $first, offset: $offset, order: $order) { totalCount nodes { "
             .. fields
-            .. " unreadCount downloadCount source { id displayName name lang } categories { nodes { id name order } } firstUnreadChapter { id name chapterNumber sourceOrder scanlator isRead } } } }",
+            .. " unreadCount source { id displayName name lang } categories { nodes { id name order } } firstUnreadChapter { id name chapterNumber sourceOrder scanlator isRead lastPageRead lastReadAt } } } }",
         variables = variables,
     })
 end
@@ -254,7 +211,7 @@ local function buildRefreshMangaMutation(manga_id, fields)
     return json.encode({
         query = "mutation REFRESH_MANGA($manga: FetchMangaInput!, $chapters: FetchChaptersInput!) { fetchManga(input: $manga) { manga { "
             .. fields
-            .. " source { id displayName name lang } } } fetchChapters(input: $chapters) { chapters { id name chapterNumber sourceOrder scanlator isRead } } }",
+            .. " source { id displayName name lang } } } fetchChapters(input: $chapters) { chapters { id name chapterNumber sourceOrder scanlator isRead lastPageRead lastReadAt } } }",
         variables = {
             manga = {
                 id = tonumber(manga_id) or manga_id,
@@ -276,7 +233,7 @@ end
 
 function Queries._buildChapterQuery(manga_id)
     return json.encode({
-        query = "mutation GET_MANGA_CHAPTERS_FETCH($input: FetchChaptersInput!) { fetchChapters(input: $input) { chapters { id name chapterNumber sourceOrder scanlator isRead } } }",
+        query = "mutation GET_MANGA_CHAPTERS_FETCH($input: FetchChaptersInput!) { fetchChapters(input: $input) { chapters { id name chapterNumber sourceOrder scanlator isRead lastPageRead lastReadAt } } }",
         variables = {
             input = {
                 mangaId = tonumber(manga_id) or manga_id,
@@ -298,7 +255,7 @@ end
 
 function Queries._buildStoredChapterQuery(manga_id)
     return json.encode({
-        query = "query GET_CHAPTERS_MANGA($filter: ChapterFilterInput, $first: Int, $order: [ChapterOrderInput!]) { chapters(filter: $filter, first: $first, order: $order) { totalCount nodes { id name chapterNumber sourceOrder scanlator isRead } } }",
+        query = "query GET_CHAPTERS_MANGA($filter: ChapterFilterInput, $first: Int, $order: [ChapterOrderInput!]) { chapters(filter: $filter, first: $first, order: $order) { totalCount nodes { id name chapterNumber sourceOrder scanlator isRead lastPageRead lastReadAt } } }",
         variables = {
             filter = {
                 mangaId = {
@@ -318,6 +275,44 @@ function Queries._buildStoredChapterQuery(manga_id)
     })
 end
 
+local function buildChapterFeedQuery(kind, first, library_filter, include_progress)
+    local filter
+    local order_by
+    if kind == "history" then
+        -- Suwayomi exposes Kotlin Long as a GraphQL string scalar.
+        filter = { lastReadAt = { greaterThan = "0" } }
+        order_by = "LAST_READ_AT"
+    else
+        filter = library_filter and { inLibrary = { equalTo = true } } or nil
+        order_by = "FETCHED_AT"
+    end
+    local fields = table.concat({
+        "id name chapterNumber sourceOrder scanlator isRead",
+        include_progress ~= false and "lastPageRead lastReadAt fetchedAt" or "lastReadAt fetchedAt",
+        "manga { " .. MANGA_FIELDS .. " source { id displayName name lang } }",
+    }, " ")
+    return json.encode({
+        query = "query GET_CHAPTER_FEED($filter: ChapterFilterInput, $first: Int, $order: [ChapterOrderInput!]) { chapters(filter: $filter, first: $first, order: $order) { nodes { "
+            .. fields
+            .. " } } }",
+        variables = {
+            filter = filter,
+            first = normalizeNumber(first, 100),
+            order = {
+                { by = order_by, byType = "DESC" },
+            },
+        },
+    })
+end
+
+function Queries._buildHistoryQuery(first, include_progress)
+    return buildChapterFeedQuery("history", first, false, include_progress)
+end
+
+function Queries._buildUpdatesQuery(first, library_filter, include_progress)
+    return buildChapterFeedQuery("updates", first, library_filter ~= false, include_progress)
+end
+
 function Queries._buildUpdateChapterReadMutation(chapter_id, is_read)
     return json.encode({
         query = "mutation UPDATE_CHAPTER_READ($input: UpdateChapterInput!) { updateChapter(input: $input) { chapter { id isRead } } }",
@@ -326,6 +321,21 @@ function Queries._buildUpdateChapterReadMutation(chapter_id, is_read)
                 id = tonumber(chapter_id) or chapter_id,
                 patch = {
                     isRead = is_read == true,
+                },
+            },
+        },
+    })
+end
+
+function Queries._buildUpdateChapterProgressMutation(chapter_id, is_read, last_page_read)
+    return json.encode({
+        query = "mutation UPDATE_CHAPTER_PROGRESS($input: UpdateChapterInput!) { updateChapter(input: $input) { chapter { id isRead lastPageRead lastReadAt } } }",
+        variables = {
+            input = {
+                id = tonumber(chapter_id) or chapter_id,
+                patch = {
+                    isRead = is_read == true,
+                    lastPageRead = math.max(0, math.floor(tonumber(last_page_read) or 0)),
                 },
             },
         },

@@ -130,7 +130,6 @@ function MangaInfo.buildMetadataText(manga)
     appendField(lines, I18n.t("Artist"), joinList(manga.artists or manga.artist))
     appendField(lines, I18n.t("Chapters"), manga.chapter_count)
     appendField(lines, I18n.t("Unread"), manga.unread_count)
-    appendField(lines, I18n.t("Downloaded"), manga.download_count)
     if manga.in_library ~= nil then
         appendField(lines, I18n.t("Library"), manga.in_library and I18n.t("In library") or I18n.t("Not in library"))
     end
@@ -150,7 +149,6 @@ function MangaInfo.buildPrimaryMetadataText(manga)
     appendField(lines, I18n.t("Artist"), joinList(manga.artists or manga.artist))
     appendField(lines, I18n.t("Chapters"), manga.chapter_count)
     appendField(lines, I18n.t("Unread"), manga.unread_count)
-    appendField(lines, I18n.t("Downloaded"), manga.download_count)
     if manga.in_library ~= nil then
         appendField(lines, I18n.t("Library"), manga.in_library and I18n.t("In library") or I18n.t("Not in library"))
     end

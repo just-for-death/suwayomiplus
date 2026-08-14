@@ -7,7 +7,6 @@
 
 local UIManager = require("ui/uimanager")
 local SuwayomiSourceCatalog = require("suwayomi/browse/source_catalog")
-local SuwayomiBrowseExtensions = require("suwayomi/browse/extensions")
 local SuwayomiSourceFetchWorker = require("suwayomi/browse/source_fetch_worker")
 local SubprocessJob = require("suwayomi/subprocess/job")
 local SuwayomiSettings = require("suwayomi/settings")
@@ -29,10 +28,6 @@ end
 local Methods = {}
 
 for name, method in pairs(SuwayomiSourceCatalog.methods) do
-    Methods[name] = method
-end
-
-for name, method in pairs(SuwayomiBrowseExtensions.methods) do
     Methods[name] = method
 end
 
