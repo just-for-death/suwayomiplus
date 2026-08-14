@@ -314,10 +314,28 @@ function Methods:syncStreamPageProgress(page)
         return false
     end
     session.last_synced_page = server_page
+
+    -- Write to ledger so it survives a crash or close.
     if self.updateChapterProgress then
-        return self:updateChapterProgress(session.manga, session.chapter, server_page)
+        self:updateChapterProgress(session.manga, session.chapter, server_page)
     end
-    return false
+
+    -- Also fire a direct API call immediately (after page image has been handed
+    -- back to the viewer) so the server sees progress even if the queued sync
+    -- worker never gets a chance to run while we are busy downloading images.
+    local manga_id = session.manga and tostring(session.manga.id or "")
+    local chapter_id = tostring(session.chapter.id or "")
+    local synced_page = server_page
+    UIManager:scheduleIn(0.5, function()
+        pcall(function()
+            local credentials = SuwayomiSettings:load()
+            if credentials and credentials.server_url and credentials.server_url ~= "" then
+                SuwayomiAPI.markChapterProgress(credentials, chapter_id, false, synced_page)
+            end
+        end)
+    end)
+
+    return true
 end
 
 function Methods:showStreamChapterPicker()
