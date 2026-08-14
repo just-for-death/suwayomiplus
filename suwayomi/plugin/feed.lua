@@ -80,14 +80,18 @@ function Methods:showChapterFeed(kind)
                 self:showMessage(is_history and I18n.t("No reading history yet.") or I18n.t("No library updates."))
                 return
             end
-            local menu = SuwayomiUI.showFeedMenu({
-                title = title,
-                kind = kind,
-                entries = result.entries,
-                thumbnail_credentials = credentials,
-            }, function(entry)
-                self:openFeedEntry(entry)
-            end)
+            local ok, menu = pcall(SuwayomiUI.showFeedMenu, {
+                    title = title,
+                    kind = kind,
+                    entries = result.entries,
+                    thumbnail_credentials = credentials,
+                }, function(entry)
+                    self:openFeedEntry(entry)
+                end)
+            if not ok or not menu then
+                self:showMessage(I18n.t("Could not open this feed."))
+                return
+            end
             if self.trackSuwayomiScreen then
                 self:trackSuwayomiScreen(kind, menu)
             end
