@@ -40,12 +40,22 @@ function Methods:getKoreaderMetadataPathForDocument(document_path)
         return nil
     end
 
-    local base_path = document_path:match("^(.*)%.[^%.%/]+$")
+    local base_path, ext = document_path:match("^(.*)%.([^%.%/]+)$")
     if not base_path then
         return nil
     end
 
-    return base_path .. ".sdr/metadata.lua"
+    local sdr_dir = base_path .. ".sdr"
+    if ext and ext ~= "" then
+        local typed_path = sdr_dir .. "/metadata." .. ext .. ".lua"
+        local ok, lfs = pcall(require, "suwayomi/fs")
+        if ok and lfs and lfs.attributes and lfs.attributes(typed_path, "mode") == "file" then
+            return typed_path
+        end
+        return typed_path
+    end
+
+    return sdr_dir .. "/metadata.lua"
 end
 
 
