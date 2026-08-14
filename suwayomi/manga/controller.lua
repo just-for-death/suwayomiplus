@@ -26,9 +26,10 @@ end
 local Methods = {}
 
 local function getSimpleUIMangaModule()
+    if not package.path:find("simpleui.koplugin", 1, true) then
+        package.path = package.path .. ";./plugins/simpleui.koplugin/?.lua"
+    end
     local ok, Manga = pcall(require, "desktop_modules/module_manga")
-    if ok and Manga then return Manga end
-    ok, Manga = pcall(require, "plugins/simpleui.koplugin/desktop_modules/module_manga")
     if ok and Manga then return Manga end
     return nil
 end
