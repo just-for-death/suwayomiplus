@@ -60,6 +60,8 @@ local MANGA_KEEP_NEXT_UNREAD_DOWNLOAD_LIMITS = {
     [10] = true,
     [50] = true,
 }
+local MAX_PINNED_MANGA = 50
+local MAX_RECENT_MANGA = 20
 
 local function copyTable(source)
     local target = {}
@@ -409,8 +411,25 @@ function SuwayomiSettings:clearSourceFilterDraft(credentials_or_url, source_id)
     return emptySourceFilterDraft()
 end
 
+function SuwayomiSettings:getDefaultDownloadDirectory()
+    local ok_dev, Device = pcall(require, "device")
+    local base_dir = (ok_dev and Device and Device.home_dir) or "/mnt/us/koreader"
+    local downloads_dir = base_dir .. "/downloads"
+    local ok_lfs, lfs = pcall(require, "suwayomi/fs")
+    if ok_lfs and lfs then
+        if lfs.attributes(downloads_dir, "mode") ~= "directory" then
+            pcall(lfs.mkdir, downloads_dir)
+        end
+    end
+    return downloads_dir
+end
+
 function SuwayomiSettings:loadDownloadDirectory()
-    return normalizeDownloadDirectory(self:open():readSetting("download_directory", DEFAULT_DOWNLOAD_DIRECTORY))
+    local dir = self:open():readSetting("download_directory", nil)
+    if type(dir) == "string" and dir ~= "" then
+        return dir
+    end
+    return self:getDefaultDownloadDirectory()
 end
 
 function SuwayomiSettings:saveDownloadDirectory(path)
@@ -718,6 +737,102 @@ function SuwayomiSettings:saveReaderReturnContexts(contexts)
     end
     self:open():saveSetting("reader_return_contexts", contexts):flush()
     return contexts
+end
+
+local function normalizeSimpleUIManga(manga)
+    if type(manga) ~= "table" or manga.id == nil then
+        return nil
+    end
+    return {
+        id = tostring(manga.id),
+        title = manga.title ~= nil and tostring(manga.title) or tostring(manga.id),
+        thumbnail_url = manga.thumbnail_url,
+        in_library = manga.in_library == true,
+        source = type(manga.source) == "table" and {
+            id = manga.source.id,
+            name = manga.source.name,
+            displayName = manga.source.displayName or manga.source.display_name,
+        } or nil,
+    }
+end
+
+local function normalizeSimpleUIChapter(chapter)
+    if type(chapter) ~= "table" or chapter.id == nil then
+        return nil
+    end
+    return {
+        id = tostring(chapter.id),
+        name = chapter.name ~= nil and tostring(chapter.name) or tostring(chapter.id),
+        is_read = chapter.is_read == true,
+        last_page_read = tonumber(chapter.last_page_read),
+        last_read_at = tonumber(chapter.last_read_at),
+    }
+end
+
+function SuwayomiSettings:loadPinnedManga()
+    local stored = self:open():readSetting("simpleui_pinned_manga", {})
+    local pins = {}
+    local seen = {}
+    for _, manga in ipairs(type(stored) == "table" and stored or {}) do
+        local normalized = normalizeSimpleUIManga(manga)
+        if normalized and not seen[normalized.id] and #pins < MAX_PINNED_MANGA then
+            seen[normalized.id] = true
+            table.insert(pins, normalized)
+        end
+    end
+    return pins
+end
+
+function SuwayomiSettings:savePinnedManga(manga_list)
+    local pins = {}
+    local seen = {}
+    for _, manga in ipairs(type(manga_list) == "table" and manga_list or {}) do
+        local normalized = normalizeSimpleUIManga(manga)
+        if normalized and not seen[normalized.id] and #pins < MAX_PINNED_MANGA then
+            seen[normalized.id] = true
+            table.insert(pins, normalized)
+        end
+    end
+    self:open():saveSetting("simpleui_pinned_manga", pins):flush()
+    return pins
+end
+
+function SuwayomiSettings:loadRecentManga()
+    local stored = self:open():readSetting("simpleui_recent_manga", {})
+    local recents = {}
+    local seen = {}
+    for _, entry in ipairs(type(stored) == "table" and stored or {}) do
+        local manga = normalizeSimpleUIManga(entry and entry.manga)
+        local chapter = normalizeSimpleUIChapter(entry and entry.chapter)
+        if manga and chapter and not seen[manga.id] and #recents < MAX_RECENT_MANGA then
+            seen[manga.id] = true
+            table.insert(recents, {
+                manga = manga,
+                chapter = chapter,
+                updated_at = tonumber(entry.updated_at) or chapter.last_read_at or 0,
+            })
+        end
+    end
+    return recents
+end
+
+function SuwayomiSettings:saveRecentManga(entries)
+    local recents = {}
+    local seen = {}
+    for _, entry in ipairs(type(entries) == "table" and entries or {}) do
+        local manga = normalizeSimpleUIManga(entry and entry.manga)
+        local chapter = normalizeSimpleUIChapter(entry and entry.chapter)
+        if manga and chapter and not seen[manga.id] and #recents < MAX_RECENT_MANGA then
+            seen[manga.id] = true
+            table.insert(recents, {
+                manga = manga,
+                chapter = chapter,
+                updated_at = tonumber(entry.updated_at) or chapter.last_read_at or os.time(),
+            })
+        end
+    end
+    self:open():saveSetting("simpleui_recent_manga", recents):flush()
+    return recents
 end
 
 return SuwayomiSettings
