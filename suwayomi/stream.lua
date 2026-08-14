@@ -323,7 +323,6 @@ function Methods:syncStreamPageProgress(page)
     -- Also fire a direct API call immediately (after page image has been handed
     -- back to the viewer) so the server sees progress even if the queued sync
     -- worker never gets a chance to run while we are busy downloading images.
-    local manga_id = session.manga and tostring(session.manga.id or "")
     local chapter_id = tostring(session.chapter.id or "")
     local synced_page = server_page
     UIManager:scheduleIn(0.5, function()
