@@ -51,7 +51,9 @@ end
 function ReadSyncWorker:appendGroupResult(credentials, items, desired_read_state, result)
     local batch_items = {}
     for _, item in ipairs(items or {}) do
-        if tonumber(item.last_page_read) then
+        -- NOTE: tonumber(0) is falsy in Lua, so we check ~= nil explicitly.
+        -- Page 0 (the first page, 0-indexed) must go through markChapterProgress.
+        if item.last_page_read ~= nil and tonumber(item.last_page_read) ~= nil then
             local api_result = SuwayomiAPI.markChapterProgress(
                 credentials,
                 item.chapter_id,
@@ -59,10 +61,9 @@ function ReadSyncWorker:appendGroupResult(credentials, items, desired_read_state
                 item.last_page_read
             )
             local entry = self:resultEntry(item)
-            if api_result and api_result.ok
-                and api_result.chapter
-                and api_result.chapter.is_read == desired_read_state
-            then
+            -- Count any successful HTTP call as success. Don't require is_read to
+            -- match: the chapter may have been marked read by another device already.
+            if api_result and api_result.ok and api_result.chapter then
                 table.insert(result.successes, entry)
             else
                 entry.error = api_result and api_result.error or "Reading progress sync failed."
