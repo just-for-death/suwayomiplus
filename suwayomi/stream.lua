@@ -321,6 +321,10 @@ function Methods:showStreamChapterPicker()
         return
     end
     local chapters = self:getStreamChapters(session.manga)
+    if type(chapters) ~= "table" or #chapters == 0 then
+        self:showMessage(I18n.t("No chapters are available for this manga."))
+        return
+    end
     local current_index = self:getStreamChapterIndex(session.chapter, session.manga)
     local menu
     menu = SuwayomiUI.showChapterMenu({
@@ -348,7 +352,7 @@ function Methods:showStreamReaderMenu()
     if prev_chapter then
         table.insert(actions, { id = "prev", text = I18n.t("Previous chapter") })
     end
-    table.insert(actions, { id = "pick", text = I18n.t("Select chapter") })
+    table.insert(actions, { id = "pick", text = I18n.t("Select chapter from this manga") })
     if self.showMangaTrackers then
         table.insert(actions, { id = "trackers", text = I18n.t("Trackers") })
     end
@@ -430,6 +434,8 @@ function Methods:bindStreamViewerControls(viewer)
             plugin:prefetchStreamPages(self._images_list_cur)
             return
         end
+        -- A forward turn after the final page marks this chapter complete and
+        -- immediately replaces the viewer with the next chapter.
         plugin:streamAdjacentChapter(1)
     end
 

@@ -131,6 +131,65 @@ function SuwayomiUI.showChapterMenu(chapter_list, onSelectCallback, onHoldCallba
     return menu
 end
 
+local function formatFeedTimestamp(value)
+    local timestamp = tonumber(value)
+    if not timestamp or timestamp <= 0 then
+        return nil
+    end
+    -- Suwayomi Long timestamps are milliseconds since epoch.
+    if timestamp > 100000000000 then
+        timestamp = math.floor(timestamp / 1000)
+    end
+    local ok, formatted = pcall(os.date, "%Y-%m-%d %H:%M", timestamp)
+    return ok and formatted or nil
+end
+
+function SuwayomiUI.showFeedMenu(options, onSelectCallback)
+    options = options or {}
+    local rows = {}
+    for _, entry in ipairs(options.entries or {}) do
+        local feed_entry = entry
+        local manga = type(feed_entry) == "table" and feed_entry.manga or nil
+        local chapter = type(feed_entry) == "table" and feed_entry.chapter or nil
+        if manga and chapter then
+            local timestamp = options.kind == "history"
+                and chapter.last_read_at
+                or chapter.fetched_at
+            table.insert(rows, {
+                text = tostring(manga.title or manga.id or I18n.t("Manga")),
+                subtitle = tostring(chapter.name or chapter.id or I18n.t("Chapter")),
+                mandatory = formatFeedTimestamp(timestamp),
+                thumbnail_url = manga.thumbnail_url,
+                thumbnail_placeholder = true,
+                thumbnail_variant = "manga_cover",
+                thumbnail_width = 64,
+                thumbnail_height = 96,
+                entry = feed_entry,
+                callback = function()
+                    if onSelectCallback then
+                        onSelectCallback(feed_entry)
+                    end
+                end,
+            })
+        end
+    end
+
+    local menu = getListMenu().show({
+        title = options.title or I18n.t("Suwayomi"),
+        item_table = rows,
+        fixed_item_heights = true,
+        items_max_lines = 3,
+        thumbnail_credentials = options.thumbnail_credentials,
+    })
+    menu.onMenuSelect = function(_menu, row)
+        if row and row.callback then
+            row.callback()
+        end
+        return true
+    end
+    return menu
+end
+
 function SuwayomiUI.showHomeDialog(options, onSelectCallback)
     local UIManager = require("ui/uimanager")
     local dialog
