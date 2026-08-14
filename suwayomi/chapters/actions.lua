@@ -143,7 +143,7 @@ function Methods:enqueueSelectedChapterDownloads(manga, chapters, download_direc
             "Queued first %1 downloads. Refine the chapter selection to queue more.",
             self.max_batch_queue_chapters
         ))
-    elseif queued == 0 and skipped > 0 then
+    else
         self:showMessage(self:formatBulkDownloadMessage(queued, skipped))
     end
     SuwayomiDebug.log({
