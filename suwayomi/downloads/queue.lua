@@ -18,10 +18,10 @@ local StatusFormatter = require("suwayomi/downloads/status_formatter")
 local DownloadQueue = {}
 DownloadQueue.__index = DownloadQueue
 
-DownloadQueue.POLL_INTERVAL_SECONDS = 0.5
+DownloadQueue.POLL_INTERVAL_SECONDS = 2.0
 DownloadQueue.WATCHDOG_TIMEOUT_SECONDS = 30 * 60
 DownloadQueue.CHAPTER_TITLE_WITH_STATUS_MAX_CHARS = 58
-DownloadQueue.MAX_ACTIVE_CHAPTERS = 2
+DownloadQueue.MAX_ACTIVE_CHAPTERS = 1
 DownloadQueue.MIN_ACTIVE_CHAPTERS = 1
 DownloadQueue.MAX_SUPPORTED_ACTIVE_CHAPTERS = 4
 
