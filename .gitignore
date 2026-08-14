@@ -1,0 +1,16 @@
+# Local / editor
+*.swp
+*~
+.DS_Store
+.idea/
+.vscode/
+
+# Test / tooling leftovers
+.luacheckcache
+luacov.*
+*.rock
+.spec/
+
+# Packaged release artifacts built locally
+dist/
+*.zip
