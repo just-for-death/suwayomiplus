@@ -194,7 +194,7 @@ function Methods:showLoadingMessage(message)
     }
     UIManager:show(loading_message)
     if UIManager.forceRePaint then
-        UIManager:forceRePaint()
+        pcall(function() UIManager:forceRePaint() end)
     end
     return loading_message
 end
