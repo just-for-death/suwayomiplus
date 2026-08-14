@@ -148,6 +148,7 @@ function Downloader:ensureMangaCover(credentials, manga_dir, manga)
         local f2 = io.open(folder_path, "wb")
         if f2 then
             f2:write(res.body)
+            f2:close()
         end
     end
 end
