@@ -326,7 +326,7 @@ function Queries._buildUpdateChapterReadMutation(chapter_id, is_read)
 end
 
 function Queries._buildUpdateChapterProgressMutation(chapter_id, is_read, last_page_read)
-    local page_num = math.max(1, math.floor(tonumber(last_page_read) or 1))
+    local page_num = math.max(0, math.floor(tonumber(last_page_read) or 0))
     local cid = tonumber(chapter_id) or chapter_id
     local patch_str = string.format("lastPageRead: %d", page_num)
     if is_read == true then
