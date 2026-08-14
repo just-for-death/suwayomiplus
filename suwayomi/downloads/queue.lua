@@ -649,9 +649,17 @@ function DownloadQueue:enqueueBatch(manga, chapters, download_directory, options
 
     self:upsertPersistentJobs(persistent_jobs)
     self.onStatusChanged()
-    self.ui_manager:scheduleIn(0, function()
-        self:process()
-    end)
+    local function triggerProcess()
+        self.ui_manager:scheduleIn(0, function()
+            self:process()
+        end)
+    end
+    local ok_net, NetworkMgr = pcall(require, "ui/network/manager")
+    if ok_net and NetworkMgr and NetworkMgr.runWhenOnline then
+        NetworkMgr:runWhenOnline(triggerProcess)
+    else
+        triggerProcess()
+    end
     local finished_at = os.time()
     if ok_socket and socket and socket.gettime then
         finished_at = socket.gettime()

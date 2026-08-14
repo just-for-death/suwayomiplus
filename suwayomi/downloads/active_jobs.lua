@@ -100,12 +100,13 @@ function ActiveJobs:runDownloaderJob(queued)
         self:writeProgressFallback(
             queued.progress_path,
             result.ok and (result.done and "downloaded" or "downloading") or "failed",
-            result.current,
-            result.total,
+            result.current or 0,
+            result.total or 0,
             result.path,
             result.error
         )
     until not result.ok or result.done
+    os.exit(0)
 end
 
 function ActiveJobs:startQueuedJob(queued)
