@@ -123,7 +123,35 @@ function Downloader:ensureDirectory(path)
     return false, "Could not create manga folder."
 end
 
-function Downloader:cleanupPartialFile(path)
+function Downloader:ensureMangaCover(credentials, manga_dir, manga)
+    if not manga_dir or manga_dir == "" or not manga then
+        return
+    end
+    local cover_path = manga_dir .. "/cover.jpg"
+    local folder_path = manga_dir .. "/folder.jpg"
+    if lfs.attributes(cover_path, "mode") == "file" then
+        return
+    end
+
+    local thumbnail_url = manga.thumbnailUrl or manga.thumbnail_url or (manga.manga and (manga.manga.thumbnailUrl or manga.manga.thumbnail_url))
+    if not thumbnail_url or thumbnail_url == "" then
+        return
+    end
+
+    local res = SuwayomiAPI.downloadBinary(credentials, thumbnail_url)
+    if res and res.ok and res.body and #res.body > 0 then
+        local f = io.open(cover_path, "wb")
+        if f then
+            f:write(res.body)
+            f:close()
+        end
+        local f2 = io.open(folder_path, "wb")
+        if f2 then
+            f2:write(res.body)
+            f2:close()
+        end
+    end
+end
     if path and path ~= "" then
         local removed = os.remove(path)
         if removed then
@@ -547,6 +575,10 @@ function Downloader:startChapterDownload(credentials, download_directory, manga,
     if not directory_ok then
         return { ok = false, error = directory_error }
     end
+
+    pcall(function()
+        self:ensureMangaCover(credentials, manga_dir, manga)
+    end)
 
     self:cleanupPartialFile(partial_path)
     local writer = Archiver.Writer:new()
