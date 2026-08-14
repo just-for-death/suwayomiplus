@@ -305,7 +305,7 @@ function Methods:syncStreamPageProgress(page)
         return false
     end
     local server_page = page - 1
-    if server_page <= (session.last_synced_page or -1) then
+    if server_page == session.last_synced_page then
         return false
     end
     session.last_synced_page = server_page
@@ -551,6 +551,7 @@ function Methods:showChapterStream(manga, chapter, pages, start_page, options)
                 key = count
             end
             max_seen = math.max(max_seen, key)
+            pcall(function() plugin:syncStreamPageProgress(key) end)
             local bytes = plugin:downloadStreamPageBytes(pages, key, image_cache)
             plugin:prefetchStreamPages(key)
             return renderPage(bytes)
