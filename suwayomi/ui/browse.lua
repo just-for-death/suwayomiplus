@@ -22,18 +22,6 @@ local function getUI()
     return require("suwayomi/ui")
 end
 
-local function findExtensionItemNumber(menu_table, pkg_name)
-    if pkg_name == nil or pkg_name == "" then
-        return nil
-    end
-    for index, row in ipairs(menu_table or {}) do
-        if type(row.extension) == "table" and row.extension.pkg_name == pkg_name then
-            return index
-        end
-    end
-    return nil
-end
-
 function BrowseUI.showSourcesMenu(sources, onSelectCallback, options)
     options = options or {}
     if type(onSelectCallback) == "table" then
@@ -54,86 +42,6 @@ function BrowseUI.showSourcesMenu(sources, onSelectCallback, options)
         on_title_bar_left_hold = options.on_title_bar_left_hold,
         thumbnail_credentials = options.thumbnail_credentials,
     }
-end
-
-function BrowseUI.showExtensionsMenu(extensions, onSelectCallback, options)
-    options = options or {}
-    local item_table = ListRows.buildExtensionMenuTable(extensions, {
-        on_select = onSelectCallback,
-        empty_text = options.empty_text,
-        show_empty_sections = options.show_empty_extension_sections,
-    })
-    return getListMenu().show{
-        title = options.title or I18n.t("Suwayomi Extensions"),
-        title_bar_left_icon = options and options.title_bar_left_icon,
-        fixed_item_heights = options.fixed_item_heights ~= false,
-        item_table = item_table,
-        itemnumber = options.itemnumber or findExtensionItemNumber(item_table, options.focus_extension_pkg_name),
-        close_callback = options.close_callback,
-        on_close = options.on_close,
-        on_title_bar_left_tap = options.on_title_bar_left_tap,
-        on_title_bar_left_hold = options.on_title_bar_left_hold,
-        thumbnail_credentials = options.thumbnail_credentials,
-    }
-end
-
-function BrowseUI.updateExtensionsMenu(menu, extensions, onSelectCallback, options)
-    options = options or {}
-    local item_table = ListRows.buildExtensionMenuTable(extensions, {
-        on_select = onSelectCallback,
-        empty_text = options.empty_text,
-        show_empty_sections = options.show_empty_extension_sections,
-    })
-    return getListMenu().update(menu, {
-        title = options.title or I18n.t("Suwayomi Extensions"),
-        title_bar_left_icon = options.title_bar_left_icon,
-        item_table = item_table,
-        itemnumber = options.itemnumber or findExtensionItemNumber(item_table, options.focus_extension_pkg_name),
-        close_callback = options.close_callback,
-        on_close = options.on_close,
-        on_title_bar_left_tap = options.on_title_bar_left_tap,
-        on_title_bar_left_hold = options.on_title_bar_left_hold,
-        thumbnail_credentials = options.thumbnail_credentials,
-    })
-end
-
-function BrowseUI.showExtensionActionMenu(extension, onSelectCallback, options)
-    options = options or {}
-    local actions = {}
-
-    local function addAction(action_id, text, destructive)
-        table.insert(actions, {
-            id = action_id,
-            text = text,
-            destructive = destructive == true or nil,
-        })
-    end
-
-    if type(extension) == "table" and extension.is_installed ~= true then
-        addAction("install", I18n.c("extension action", "Install"))
-    elseif type(extension) == "table" and extension.has_update == true then
-        addAction("update", I18n.c("extension action", "Update"))
-    end
-    if type(extension) == "table" and extension.is_installed == true then
-        addAction("uninstall", I18n.c("extension action", "Uninstall"), true)
-    end
-
-    if #actions == 0 then
-        table.insert(actions, { text = I18n.t("No actions available") })
-    end
-
-    return require("suwayomi/ui").showActionMenu({
-        title = options.title or ListRows.getExtensionTitle(extension),
-        actions = actions,
-        anchor = options.anchor,
-        close_callback = options.close_callback,
-        vertical = true,
-        destructive_actions_at_bottom = true,
-    }, function(action)
-        if action and action.id and onSelectCallback then
-            onSelectCallback(action.id)
-        end
-    end)
 end
 
 function BrowseUI.showSourceModeMenu(source, onSelectCallback, options)
@@ -908,59 +816,6 @@ function BrowseUI.showOverwriteSavedFilterConfirm(name, onConfirm)
         cancel_text = I18n.t("Cancel"),
         ok_callback = onConfirm,
     })
-end
-
-function BrowseUI.showExtensionSearchPrompt(currentQuery, onSearchCallback)
-    local UIManager = require("ui/uimanager")
-    local dialog
-    local handled = false
-    local function finish(query)
-        if handled then
-            return
-        end
-        handled = true
-        UIManager:close(dialog)
-        if onSearchCallback then
-            onSearchCallback(query or "")
-        end
-    end
-    dialog = MultiInputDialog:new{
-        title = I18n.t("Search extensions"),
-        fields = {
-            {
-                hint = I18n.t("Extension name, language, or package"),
-                text = currentQuery or "",
-            },
-        },
-        buttons = {
-            {
-                {
-                    text = I18n.t("Cancel"),
-                    id = "close",
-                    callback = function()
-                        finish("")
-                    end,
-                },
-                {
-                    text = I18n.c("extension action", "Search"),
-                    is_enter_default = true,
-                    callback = function()
-                        local fields = dialog:getFields()
-                        finish(fields[1] or "")
-                    end,
-                },
-            },
-        },
-        close_callback = function()
-            if not handled and onSearchCallback then
-                handled = true
-                onSearchCallback("")
-            end
-        end,
-    }
-    UIManager:show(dialog)
-    dialog:onShowKeyboard()
-    return dialog
 end
 
 function BrowseUI.showGlobalSearchPrompt(onSearchCallback)

@@ -44,19 +44,47 @@ function ReadSyncWorker:resultEntry(item)
         key = item.key,
         chapter_id = item.chapter_id,
         desired_read_state = item.desired_read_state == true,
+        last_page_read = tonumber(item.last_page_read),
     }
 end
 
 function ReadSyncWorker:appendGroupResult(credentials, items, desired_read_state, result)
-    local chapter_ids = {}
+    local batch_items = {}
     for _, item in ipairs(items or {}) do
+        if tonumber(item.last_page_read) then
+            local api_result = SuwayomiAPI.markChapterProgress(
+                credentials,
+                item.chapter_id,
+                desired_read_state,
+                item.last_page_read
+            )
+            local entry = self:resultEntry(item)
+            if api_result and api_result.ok
+                and api_result.chapter
+                and api_result.chapter.is_read == desired_read_state
+            then
+                table.insert(result.successes, entry)
+            else
+                entry.error = api_result and api_result.error or "Reading progress sync failed."
+                table.insert(result.failures, entry)
+            end
+        else
+            table.insert(batch_items, item)
+        end
+    end
+    if #batch_items == 0 then
+        return
+    end
+
+    local chapter_ids = {}
+    for _, item in ipairs(batch_items) do
         table.insert(chapter_ids, item.chapter_id)
     end
 
     local api_result = SuwayomiAPI.markChaptersReadState(credentials, chapter_ids, desired_read_state)
     if not api_result or not api_result.ok then
         local error_message = api_result and api_result.error or "Read sync failed."
-        for _, item in ipairs(items or {}) do
+        for _, item in ipairs(batch_items) do
             local entry = self:resultEntry(item)
             entry.error = error_message
             table.insert(result.failures, entry)
@@ -71,7 +99,7 @@ function ReadSyncWorker:appendGroupResult(credentials, items, desired_read_state
         end
     end
 
-    for _, item in ipairs(items or {}) do
+    for _, item in ipairs(batch_items) do
         local entry = self:resultEntry(item)
         if confirmed[tostring(item.chapter_id)] then
             table.insert(result.successes, entry)

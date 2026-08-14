@@ -12,6 +12,7 @@ local SuwayomiAPI = require("suwayomi/api")
 local SuwayomiSettings = require("suwayomi/settings")
 local SuwayomiUI = require("suwayomi/ui")
 local UIManager = require("ui/uimanager")
+local BD = require("ui/bidi")
 
 local Stream = {}
 Stream.__index = Stream
@@ -78,20 +79,30 @@ function Methods:cancelChapterStreamRequest()
     return true
 end
 
--- The live chapter menu is the best source, but it only exists in file manager
--- mode, so the session keeps its own snapshot as a fallback.
-function Methods:getStreamChapters()
+-- The chapter menu may already be gone once pages arrive, so the active stream
+-- keeps its own chapter-order snapshot.
+function Methods:getStreamChapters(manga)
     local context = self.current_chapter_context
     if self.getVisibleChapters and context and type(context.chapters) == "table" and #context.chapters > 0 then
         return self:getVisibleChapters(context.chapters) or {}
     end
     local session = self.stream_session
-    return (session and session.chapters) or {}
+    if session and type(session.chapters) == "table" and #session.chapters > 0 then
+        return session.chapters
+    end
+    return {}
 end
 
-function Methods:getStreamChapterIndex(chapter)
+function Methods:rememberStreamChapterList(manga, chapters)
+    if type(chapters) ~= "table" or #chapters == 0 then
+        chapters = self:getStreamChapters(manga)
+    end
+    return chapters
+end
+
+function Methods:getStreamChapterIndex(chapter, manga)
     local target = chapterKey(chapter)
-    for index, current in ipairs(self:getStreamChapters()) do
+    for index, current in ipairs(self:getStreamChapters(manga)) do
         if chapterKey(current) == target then
             return index, current
         end
@@ -104,11 +115,11 @@ function Methods:getAdjacentStreamChapter(delta)
     if not session or not session.chapter then
         return nil
     end
-    local index = self:getStreamChapterIndex(session.chapter)
+    local index = self:getStreamChapterIndex(session.chapter, session.manga)
     if not index then
         return nil
     end
-    return self:getStreamChapters()[index + delta]
+    return self:getStreamChapters(session.manga)[index + delta]
 end
 
 function Methods:rememberStreamPageCache(chapter_id, pages)
@@ -267,14 +278,35 @@ function Methods:streamAdjacentChapter(delta)
         end
         return false
     end
-    if delta > 0 and session and session.chapter and session.chapter.is_read ~= true and self.markChapterRead then
+    if delta > 0 and session and session.chapter and self.markChapterRead then
+        session.advancing = true
         self:markChapterRead(session.manga, session.chapter, {
-            skip_refresh = true,
-            skip_delete_after_mark_read = true,
+            last_page_read = session.pages and math.max(0, #session.pages - 1) or nil,
         })
     end
+    local chapters = session.chapters
+    if type(chapters) ~= "table" or #chapters == 0 then
+        chapters = self:getStreamChapters(session.manga)
+    end
     self:closeStreamViewer()
-    return self:streamChapter(session.manga, next_chapter)
+    return self:streamChapter(session.manga, next_chapter, { chapters = chapters })
+end
+
+function Methods:syncStreamPageProgress(page)
+    local session = self.stream_session
+    page = math.floor(tonumber(page) or 0)
+    if not session or not session.chapter or page <= 0 then
+        return false
+    end
+    local server_page = page - 1
+    if server_page <= (session.last_synced_page or -1) then
+        return false
+    end
+    session.last_synced_page = server_page
+    if self.updateChapterProgress then
+        return self:updateChapterProgress(session.manga, session.chapter, server_page)
+    end
+    return false
 end
 
 function Methods:showStreamChapterPicker()
@@ -282,8 +314,8 @@ function Methods:showStreamChapterPicker()
     if not session then
         return
     end
-    local chapters = self:getStreamChapters()
-    local current_index = self:getStreamChapterIndex(session.chapter)
+    local chapters = self:getStreamChapters(session.manga)
+    local current_index = self:getStreamChapterIndex(session.chapter, session.manga)
     local menu
     menu = SuwayomiUI.showChapterMenu({
         title = session.manga and session.manga.title or I18n.t("Chapters"),
@@ -292,7 +324,7 @@ function Methods:showStreamChapterPicker()
     }, function(chapter)
         UIManager:close(menu)
         self:closeStreamViewer()
-        self:streamChapter(session.manga, chapter)
+        self:streamChapter(session.manga, chapter, { chapters = chapters })
     end)
 end
 
@@ -310,7 +342,7 @@ function Methods:showStreamReaderMenu()
     if prev_chapter then
         table.insert(actions, { id = "prev", text = I18n.t("Previous chapter") })
     end
-    table.insert(actions, { id = "pick", text = I18n.t("Switch chapter") })
+    table.insert(actions, { id = "pick", text = I18n.t("Select chapter") })
     if self.showMangaTrackers then
         table.insert(actions, { id = "trackers", text = I18n.t("Trackers") })
     end
@@ -339,6 +371,47 @@ function Methods:bindStreamViewerControls(viewer)
     local original_next = viewer.onShowNextImage
     local original_prev = viewer.onShowPrevImage
     local original_hold_release = viewer.onHoldRelease
+    local original_swipe = viewer.onSwipe
+
+    local function swipe_requests_next(direction)
+        if direction == "west" or direction == "northwest" or direction == "southwest" then
+            return not BD.mirroredUILayout()
+        end
+        if direction == "east" or direction == "northeast" or direction == "southeast" then
+            return BD.mirroredUILayout()
+        end
+        return false
+    end
+
+    local function swipe_requests_prev(direction)
+        if direction == "west" or direction == "northwest" or direction == "southwest" then
+            return BD.mirroredUILayout()
+        end
+        if direction == "east" or direction == "northeast" or direction == "southeast" then
+            return not BD.mirroredUILayout()
+        end
+        return false
+    end
+
+    -- ImageViewer only turns pages on tap; on e-ink most people swipe like in the
+    -- normal reader, which otherwise just pans the zoomed image.
+    function viewer:onSwipe(arg, ges)
+        ges = ges or arg
+        if self._images_list and (self.scale_factor or 0) == 0 and ges and ges.direction then
+            if swipe_requests_next(ges.direction) then
+                self:onShowNextImage()
+                return true
+            end
+            if swipe_requests_prev(ges.direction) then
+                self:onShowPrevImage()
+                return true
+            end
+        end
+        if original_swipe then
+            return original_swipe(self, arg, ges)
+        end
+        return true
+    end
 
     function viewer:onShowNextImage()
         if self._images_list_cur < self._images_list_nb then
@@ -347,6 +420,7 @@ function Methods:bindStreamViewerControls(viewer)
             else
                 self:switchToImageNum(self._images_list_cur + 1)
             end
+            plugin:syncStreamPageProgress(self._images_list_cur)
             plugin:prefetchStreamPages(self._images_list_cur)
             return
         end
@@ -360,6 +434,7 @@ function Methods:bindStreamViewerControls(viewer)
             else
                 self:switchToImageNum(self._images_list_cur - 1)
             end
+            plugin:syncStreamPageProgress(self._images_list_cur)
             plugin:prefetchStreamPages(self._images_list_cur)
             return
         end
@@ -379,6 +454,22 @@ function Methods:bindStreamViewerControls(viewer)
         end
         if original_hold_release then
             return original_hold_release(self, arg, ges)
+        end
+        return true
+    end
+
+    -- Long hold without moving opens the chapter menu on devices where the
+    -- release handler above never sees _panning set.
+    local original_hold = viewer.onHold
+    function viewer:onHold(arg, ges)
+        if original_hold then
+            original_hold(self, arg, ges)
+        else
+            self._panning = true
+            if ges and ges.pos then
+                self._pan_relative_x = ges.pos.x
+                self._pan_relative_y = ges.pos.y
+            end
         end
         return true
     end
@@ -407,15 +498,18 @@ function Methods:withStreamLoadingFeedback(text, callback)
     return result
 end
 
-function Methods:showChapterStream(manga, chapter, pages, start_page)
+function Methods:showChapterStream(manga, chapter, pages, start_page, options)
+    options = options or {}
     if type(pages) ~= "table" or #pages == 0 then
         self:showMessage(I18n.t("This chapter has no pages to stream."))
         return false
     end
 
-    -- Read before the outgoing session is torn down, since it is the fallback
-    -- source of chapter order when no chapter menu is loaded.
-    local chapters = self:getStreamChapters()
+    local chapters = options.chapters
+    if type(chapters) ~= "table" or #chapters == 0 then
+        chapters = self:getStreamChapters(manga)
+    end
+    self:rememberStreamChapterList(manga, chapters)
 
     -- Opening a chapter while another is on screen would stack two viewers.
     self:closeStreamViewer()
@@ -474,13 +568,17 @@ function Methods:showChapterStream(manga, chapter, pages, start_page)
             self.stream_viewer = nil
         end
         self:cancelStreamPrefetch()
-        if self.stream_session and self.stream_session.chapter == chapter then
+        local session = self.stream_session
+        if session and session.chapter == chapter then
             self:releaseStreamSession()
         end
-        if max_seen >= count and chapter and chapter.is_read ~= true and self.markChapterRead then
+        if max_seen >= count
+            and chapter
+            and self.markChapterRead
+            and not (session and session.advancing)
+        then
             self:markChapterRead(manga, chapter, {
-                skip_refresh = true,
-                skip_delete_after_mark_read = true,
+                last_page_read = math.max(0, count - 1),
             })
         end
     end
@@ -499,6 +597,7 @@ function Methods:showChapterStream(manga, chapter, pages, start_page)
         chapters = chapters,
         pages = pages,
         image_cache = image_cache,
+        last_synced_page = tonumber(chapter.last_page_read) or -1,
     }
     self.stream_viewer = viewer
     self:bindStreamViewerControls(viewer)
@@ -506,12 +605,14 @@ function Methods:showChapterStream(manga, chapter, pages, start_page)
     if start_page and start_page > 1 then
         viewer:switchToImageNum(math.min(start_page, count))
     end
+    self:syncStreamPageProgress(start_page or 1)
     self:prefetchStreamPages(start_page or 1)
     self:prefetchNextChapterPages()
     return true
 end
 
-function Methods:streamChapter(manga, chapter)
+function Methods:streamChapter(manga, chapter, options)
+    options = options or {}
     if not manga or not chapter or not chapter.id then
         self:showMessage(I18n.t("Could not stream this chapter."))
         return false
@@ -530,12 +631,15 @@ function Methods:streamChapter(manga, chapter)
     end
 
     local cached_pages = self.stream_page_lists and self.stream_page_lists[chapterKey(chapter)]
+    local start_page = tonumber(options.start_page)
+        or (tonumber(chapter.last_page_read) and tonumber(chapter.last_page_read) + 1)
+        or 1
     if cached_pages then
         runWhenOnline(function()
             if not isStreamStillWanted() then
                 return
             end
-            self:showChapterStream(manga, chapter, cached_pages)
+            self:showChapterStream(manga, chapter, cached_pages, start_page, options)
         end)
         return true
     end
@@ -576,7 +680,7 @@ function Methods:streamChapter(manga, chapter)
                     self:showMessage((result and result.error) or I18n.t("Could not fetch chapter pages."))
                     return
                 end
-                self:showChapterStream(manga, chapter, result.pages)
+                self:showChapterStream(manga, chapter, result.pages, start_page, options)
             end,
         })
 
