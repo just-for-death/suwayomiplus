@@ -22,30 +22,6 @@ local function parseSource(source)
     }
 end
 
-local function parseExtensionNode(extension)
-    if type(extension) ~= "table" then
-        return nil
-    end
-    local pkg_name = extension.pkgName or extension.pkg_name
-    if pkg_name == nil then
-        return nil
-    end
-    return {
-        pkg_name = tostring(pkg_name),
-        name = extension.name or tostring(pkg_name),
-        lang = extension.lang,
-        version_name = extension.versionName,
-        version_code = tonumber(extension.versionCode) or extension.versionCode,
-        is_nsfw = extension.isNsfw == true,
-        is_installed = extension.isInstalled == true,
-        has_update = extension.hasUpdate == true,
-        is_obsolete = extension.isObsolete == true,
-        icon_url = extension.iconUrl,
-        apk_name = extension.apkName,
-        repo = extension.repo,
-    }
-end
-
 local function normalizeFilterType(filter)
     local typename = filter.__typename or filter.type
     if typename then
@@ -143,7 +119,7 @@ local function parseChapterNode(chapter)
         chapter_name = chapter.chapterNumber and ("Chapter " .. tostring(chapter.chapterNumber)) or tostring(chapter.id)
     end
 
-    return {
+    local parsed = {
         id = tostring(chapter.id),
         name = chapter_name,
         chapter_number = chapter.chapterNumber,
@@ -151,6 +127,10 @@ local function parseChapterNode(chapter)
         scanlator = chapter.scanlator,
         is_read = chapter.isRead == true,
     }
+    parsed.last_page_read = tonumber(chapter.lastPageRead)
+    parsed.last_read_at = tonumber(chapter.lastReadAt)
+    parsed.fetched_at = tonumber(chapter.fetchedAt)
+    return parsed
 end
 
 local function normalizeGenres(genre)
@@ -180,9 +160,6 @@ local function parseMangaNode(entry)
     end
     if entry.unreadCount ~= nil then
         manga.unread_count = tonumber(entry.unreadCount) or 0
-    end
-    if entry.downloadCount ~= nil then
-        manga.download_count = tonumber(entry.downloadCount) or 0
     end
     if entry.initialized ~= nil then
         manga.initialized = entry.initialized == true
@@ -279,27 +256,6 @@ function Parsers.isOptionalSourceMetadataFieldError(response_body)
         local mentions_optional_field = message:match("iconUrl")
             or message:match("isNsfw")
             or message:match("supportsLatest")
-        local looks_like_schema_error = message:match("Cannot query field")
-            or message:match("Unknown field")
-            or message:match("FieldUndefined")
-        if mentions_optional_field and looks_like_schema_error then
-            return true
-        end
-    end
-    return false
-end
-
-function Parsers.isOptionalExtensionMetadataFieldError(response_body)
-    local payload = json.decode(response_body, 1, nil)
-    if type(payload) ~= "table" or type(payload.errors) ~= "table" then
-        return false
-    end
-
-    for _, graph_error in ipairs(payload.errors) do
-        local message = tostring(graph_error and graph_error.message or "")
-        local mentions_optional_field = message:match("iconUrl")
-            or message:match("apkName")
-            or message:match("repo")
         local looks_like_schema_error = message:match("Cannot query field")
             or message:match("Unknown field")
             or message:match("FieldUndefined")
@@ -466,53 +422,6 @@ function Parsers.isSourceMetadataFieldError(response_body)
     return false
 end
 
-function Parsers.parseExtensionsResponse(response_body)
-    local payload, _, err = json.decode(response_body, 1, nil)
-    if err then
-        return nil, "Invalid response from Suwayomi server."
-    end
-
-    local extension_nodes = payload
-        and payload.data
-        and payload.data.fetchExtensions
-        and payload.data.fetchExtensions.extensions
-    if type(extension_nodes) ~= "table" then
-        local graph_error = payload and payload.errors and payload.errors[1] and payload.errors[1].message
-        return nil, graph_error or "Suwayomi server did not return an extension list."
-    end
-
-    local extensions = {}
-    for _, extension in ipairs(extension_nodes) do
-        local parsed = parseExtensionNode(extension)
-        if parsed then
-            table.insert(extensions, parsed)
-        end
-    end
-    return extensions
-end
-
-function Parsers.parseUpdateExtensionResponse(response_body)
-    local payload, _, err = json.decode(response_body, 1, nil)
-    if err then
-        return nil, "Invalid response from Suwayomi server."
-    end
-
-    local extension = payload
-        and payload.data
-        and payload.data.updateExtension
-        and payload.data.updateExtension.extension
-    if type(extension) ~= "table" then
-        local graph_error = payload and payload.errors and payload.errors[1] and payload.errors[1].message
-        return nil, graph_error or "Suwayomi server did not update extension."
-    end
-
-    local parsed = parseExtensionNode(extension)
-    if not parsed then
-        return nil, "Suwayomi server returned an invalid extension."
-    end
-    return parsed
-end
-
 function Parsers.parseMangaResponse(response_body)
     local payload, _, err = json.decode(response_body, 1, nil)
     if err then
@@ -675,6 +584,8 @@ function Parsers.parseRefreshMangaResponse(response_body)
             source_order = parsed_chapter.source_order,
             scanlator = parsed_chapter.scanlator,
             is_read = parsed_chapter.is_read,
+            last_page_read = parsed_chapter.last_page_read,
+            last_read_at = parsed_chapter.last_read_at,
         })
     end
     local parsed_manga = parseMangaNode(manga)
@@ -784,6 +695,30 @@ function Parsers.parseStoredChapterResponse(response_body)
     return chapters
 end
 
+function Parsers.parseChapterFeedResponse(response_body)
+    local payload, _, err = json.decode(response_body, 1, nil)
+    if err then
+        return nil, "Invalid response from Suwayomi server."
+    end
+    local nodes = payload and payload.data and payload.data.chapters and payload.data.chapters.nodes
+    if type(nodes) ~= "table" then
+        local graph_error = payload and payload.errors and payload.errors[1] and payload.errors[1].message
+        return nil, graph_error or "Suwayomi server did not return a chapter feed."
+    end
+    local entries = {}
+    for _, node in ipairs(nodes) do
+        local chapter = parseChapterNode(node)
+        local manga = parseMangaNode(type(node) == "table" and node.manga or nil)
+        if chapter and manga then
+            table.insert(entries, {
+                chapter = chapter,
+                manga = manga,
+            })
+        end
+    end
+    return entries
+end
+
 function Parsers.parseMarkChapterReadResponse(response_body)
     local payload, _, err = json.decode(response_body, 1, nil)
     if err then
@@ -806,6 +741,8 @@ function Parsers.parseMarkChapterReadResponse(response_body)
     return {
         id = tostring(chapter.id),
         is_read = chapter.isRead == true,
+        last_page_read = tonumber(chapter.lastPageRead),
+        last_read_at = tonumber(chapter.lastReadAt),
     }
 end
 

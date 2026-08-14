@@ -12,7 +12,6 @@ local I18n = require("suwayomi/i18n")
 
 local HomeController = {}
 HomeController.__index = HomeController
-local READER_RETURN_MENU_ID = "suwayomi_reader_return"
 
 -- Controllers expose new(deps) for a consistent boundary; methods remain plugin-bound mixins so this refactor can move code without changing callback behavior.
 function HomeController:new(deps)
@@ -23,20 +22,6 @@ function HomeController:new(deps)
 end
 
 local Methods = {}
-
-local function ensureReaderReturnMenuOrder()
-    local ok, reader_menu_order = pcall(require, "ui/elements/reader_menu_order")
-    local main_order = ok and reader_menu_order and reader_menu_order.main or nil
-    if type(main_order) ~= "table" then
-        return
-    end
-    for _, item_id in ipairs(main_order) do
-        if item_id == READER_RETURN_MENU_ID then
-            return
-        end
-    end
-    table.insert(main_order, 1, READER_RETURN_MENU_ID)
-end
 
 function Methods:showNotImplemented(message)
     self:showMessage(message)
@@ -78,6 +63,24 @@ function Methods:buildHomeActions()
             callback = function()
                 return self:showTopLevelScreen("downloads", function()
                     return self:showDownloads()
+                end)
+            end,
+        },
+        {
+            id = "history",
+            text = I18n.t("History"),
+            callback = function()
+                return self:showTopLevelScreen("history", function()
+                    return self:showHistory()
+                end)
+            end,
+        },
+        {
+            id = "updates",
+            text = I18n.t("Updates"),
+            callback = function()
+                return self:showTopLevelScreen("updates", function()
+                    return self:showUpdates()
                 end)
             end,
         },
@@ -227,60 +230,7 @@ function Methods:launch()
 end
 
 
-function Methods:buildReaderChapterMenuItems()
-    return {
-        {
-            text = I18n.t("Next chapter"),
-            enabled_func = function()
-                return self.hasReaderChapterNavigation and self:hasReaderChapterNavigation() == true
-            end,
-            callback = function()
-                self:openAdjacentChapterFromReader(1)
-            end,
-        },
-        {
-            text = I18n.t("Previous chapter"),
-            enabled_func = function()
-                return self.hasReaderChapterNavigation and self:hasReaderChapterNavigation() == true
-            end,
-            callback = function()
-                self:openAdjacentChapterFromReader(-1)
-            end,
-        },
-        {
-            text = I18n.t("Chapter list"),
-            enabled_func = function()
-                return self.hasReaderChapterNavigation and self:hasReaderChapterNavigation() == true
-            end,
-            callback = function()
-                self:showReaderChapterPicker()
-            end,
-        },
-        {
-            text = I18n.t("Go to Suwayomi"),
-            separator = true,
-            callback = function()
-                self:returnToSuwayomiChapters()
-            end,
-        },
-    }
-end
-
-
 function Methods:addToMainMenu(menu_items)
-    if self:isBookMode() then
-        local context = self.getCurrentReaderReturnContext and self:getCurrentReaderReturnContext() or nil
-        if context then
-            ensureReaderReturnMenuOrder()
-            menu_items[READER_RETURN_MENU_ID] = {
-                text = I18n.t("Suwayomi"),
-                sorting_hint = "main",
-                sub_item_table = self:buildReaderChapterMenuItems(),
-            }
-        end
-        return
-    end
-
     menu_items.suwayomi = {
         text = I18n.t("Suwayomi"),
         sorting_hint = "search",

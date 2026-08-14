@@ -174,28 +174,10 @@ function Methods:getAllChaptersForManga(manga)
 end
 
 
-function Methods:getChapterDownloadKey(manga, chapter)
-    return self:getDownloadQueue():getKey(manga, chapter)
-end
-
-
-function Methods:getChapterProgressPath(manga, chapter, download_directory)
-    return self:getDownloadQueue():buildProgressPath(manga, chapter, download_directory)
-end
-
-
-function Methods:getChapterDownloadStatus(manga, chapter)
-    return self:getDownloadQueue():getStatus(manga, chapter)
-end
-
-
-function Methods:setChapterDownloadStatus(manga, chapter, status)
-    self:getDownloadQueue():setStatus(manga, chapter, status)
-end
-
-
-function Methods:formatChapterMenuText(chapter, status)
-    return self:getDownloadQueue():formatChapterMenuText(chapter, status)
+function Methods:getChapterKey(manga, chapter)
+    return tostring(manga and (manga.id or manga.title) or "")
+        .. ":"
+        .. tostring(chapter and (chapter.id or chapter.name) or "")
 end
 
 
@@ -403,11 +385,6 @@ function Methods:handleChapterHold(manga, chapter)
 end
 
 function Methods:handleChapterTap(manga, chapter)
-    if self.selection_mode then
-        self:toggleChapterSelection(manga, chapter)
-        return
-    end
-
     if self.openChapterForTap then
         self:openChapterForTap(manga, chapter)
         return
@@ -438,90 +415,6 @@ function Methods:pluralize(count, singular, plural)
         return singular
     end
     return plural
-end
-
-
-function Methods:formatBulkDownloadMessage(queued, skipped)
-    local parts = {}
-    if queued > 0 then
-        table.insert(parts, I18n.count(
-            queued,
-            "Queued %1 selected chapter download.",
-            "Queued %1 selected chapter downloads."
-        ))
-    else
-        table.insert(parts, I18n.t("No new downloads queued."))
-    end
-
-    if skipped > 0 then
-        table.insert(parts, I18n.count(
-            skipped,
-            "Skipped %1 already downloaded or queued.",
-            "Skipped %1 already downloaded or queued."
-        ))
-    end
-    return table.concat(parts, " ")
-end
-
-
-function Methods:canQueueChapterDownload(manga, chapter)
-    if chapter.is_read == true then
-        return false
-    end
-
-    local status = self:getDownloadQueue():getStatus(manga, chapter)
-    if status and (
-        status.state == "queued"
-            or status.state == "downloading"
-            or status.state == "downloaded"
-            or status.state == "skipped"
-    ) then
-        return false
-    end
-
-    local downloaded = self:isChapterDownloaded(manga, chapter)
-    return downloaded ~= true
-end
-
-
-function Methods:isChapterDownloadAvailable(manga, chapter)
-    local status = self:getDownloadQueue():getStatus(manga, chapter)
-    if status and (
-        status.state == "queued"
-            or status.state == "downloading"
-            or status.state == "downloaded"
-            or status.state == "skipped"
-    ) then
-        return true
-    end
-
-    local downloaded = self:isChapterDownloaded(manga, chapter)
-    return downloaded == true
-end
-
-
-function Methods:getNextUnreadChaptersForDownload(manga, limit)
-    local chapters = {}
-    for _index, chapter in ipairs(self:getVisibleChapters((self.current_chapter_context and self.current_chapter_context.chapters) or {})) do
-        if self:canQueueChapterDownload(manga, chapter) then
-            table.insert(chapters, chapter)
-            if #chapters >= limit then
-                break
-            end
-        end
-    end
-    return chapters
-end
-
-
-function Methods:getReadChaptersFromCurrentContext()
-    local read_chapters = {}
-    for _index, chapter in ipairs(self:getVisibleChapters((self.current_chapter_context and self.current_chapter_context.chapters) or {})) do
-        if chapter.is_read == true then
-            table.insert(read_chapters, chapter)
-        end
-    end
-    return read_chapters
 end
 
 

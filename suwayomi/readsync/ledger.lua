@@ -1,6 +1,6 @@
 -- Boundary: ReadSyncLedger.
 --
--- Responsibility: Owns read-ledger keys, upserts, pending batches, and downloaded chapter reconciliation.
+-- Responsibility: Owns read-ledger keys, upserts, pending batches, and chapter read-state reconciliation.
 -- Owned state: Works on settings-backed ledger tables and keeps network sync decisions explicit for the controller.
 -- Dependencies: KOReader UI helpers, Suwayomi runtime modules, and gettext are required at module load to match the original plugin runtime.
 -- External data: callers must continue to treat API responses, settings values, worker files, and filesystem paths as untrusted until checked locally.
@@ -50,6 +50,7 @@ function Methods:upsertChapterLedgerEntryInLedger(ledger, manga, chapter, update
         path = existing.path,
         pending_read_sync = existing.pending_read_sync == true or nil,
         pending_read_state = existing.pending_read_state,
+        pending_last_page_read = tonumber(existing.pending_last_page_read),
     }
 
     for update_key, value in pairs(updates or {}) do
@@ -70,7 +71,7 @@ end
 
 
 function Methods:getChapterLedgerKey(manga, chapter)
-    return self:getChapterDownloadKey(manga, chapter)
+    return self:getChapterKey(manga, chapter)
 end
 
 
@@ -96,7 +97,9 @@ function Methods:mergeChaptersWithReadLedger(manga, chapters)
                 pending_read_state = entry.read == true
             end
         end
-        local remote_matches_pending = pending_read_state ~= nil and suwayomi_is_read == pending_read_state
+        local remote_matches_pending = pending_read_state ~= nil
+            and suwayomi_is_read == pending_read_state
+            and not (entry and tonumber(entry.pending_last_page_read))
         local is_read = pending_read_state
         if remote_matches_pending then
             pending_read_state = nil
@@ -132,6 +135,7 @@ function Methods:mergeChaptersWithReadLedger(manga, chapters)
                 path = entry and entry.path or nil,
                 pending_read_sync = pending_read_state ~= nil and true or nil,
                 pending_read_state = pending_read_state,
+            pending_last_page_read = entry and tonumber(entry.pending_last_page_read) or nil,
             }
             changed = true
         elseif entry and entry.read == true then
@@ -242,6 +246,7 @@ function Methods:buildPendingReadSyncBatch(ledger, max_count)
             key = key,
             chapter_id = tostring(entry.chapter_id),
             desired_read_state = desired_read_state == true,
+            last_page_read = tonumber(entry.pending_last_page_read),
         })
     end
     return batch

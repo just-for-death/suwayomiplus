@@ -33,10 +33,11 @@ local ReadSyncController = require("suwayomi/readsync/controller")
 local ChapterStream = require("suwayomi/stream")
 local ChapterCacheReader = require("suwayomi/cache_reader")
 local MangaTrackers = require("suwayomi/trackers")
+local FeedController = require("suwayomi/plugin/feed")
 local I18n = require("suwayomi/i18n")
 
 local SuwayomiPlugin = WidgetContainer:extend{
-    name = "suwayomi",
+    name = "suwayomiplus",
     is_doc_only = false,
     selection_mode = false,
     max_batch_queue_chapters = 500,
@@ -178,14 +179,14 @@ function SuwayomiPlugin:closeSuwayomiPlugin()
         if self.cancelTrackerRequests then
             self:cancelTrackerRequests()
         end
+        if self.cancelFeedRequest then
+            self:cancelFeedRequest()
+        end
         if self.client and self.client.cancelLibraryNetworkRequests then
             self.client:cancelLibraryNetworkRequests()
         end
         if self.cancelSourceFetchWorker then
             self:cancelSourceFetchWorker()
-        end
-        if self.cancelExtensionWorker then
-            self:cancelExtensionWorker()
         end
         if self.cancelPendingReadSync then
             self:cancelPendingReadSync({ close = true })
@@ -268,19 +269,22 @@ function SuwayomiPlugin:init()
     if self.ui and self.ui.menu then
         self.ui.menu:registerToMainMenu(self)
     end
-    -- Only the file manager instance owns the queue. Recovering from the reader
-    -- instance too would start a second worker on the same files, and would
-    -- kick off downloads while the user is reading.
     if self:isBookMode() then
-        if self:hasReaderChapterNavigation() then
-            self:installReaderEndOfChapterHook()
-            self:scheduleNextChapterPrefetch()
+        if self.hasReaderChapterNavigation and self:hasReaderChapterNavigation() then
+            if self.installReaderEndOfChapterHook then
+                self:installReaderEndOfChapterHook()
+            end
+            if self.scheduleNextChapterPrefetch then
+                self:scheduleNextChapterPrefetch()
+            end
         end
     else
         self:getDownloadQueue():recover()
         UIManager:scheduleIn(2, function()
             pcall(function()
-                self:cleanupChapterCacheLeftovers()
+                if self.cleanupChapterCacheLeftovers then
+                    self:cleanupChapterCacheLeftovers()
+                end
             end)
         end)
     end
@@ -306,6 +310,7 @@ local CONTROLLER_MODULES = {
     ChapterStream,
     ChapterCacheReader,
     MangaTrackers,
+    FeedController,
 }
 
 -- Method installation keeps KOReader callback names stable while moving feature logic into documented modules.

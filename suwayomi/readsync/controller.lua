@@ -1,7 +1,7 @@
 -- Boundary: ReadSyncController.
 --
 -- Responsibility: Owns read-sync worker scheduling, result application, manual sync, and document-close sync.
--- Owned state: Coordinates ledger, KOReader metadata, downloads cleanup, and subprocess result files.
+-- Owned state: Coordinates ledger, KOReader metadata, worker lifecycle cleanup, and subprocess result files.
 -- Dependencies: KOReader UI helpers, Suwayomi runtime modules, and plugin i18n facade.
 -- External data: callers must continue to treat API responses, settings values, worker files, and filesystem paths as untrusted until checked locally.
 
@@ -139,12 +139,16 @@ function Methods:applyPendingReadSyncResult(active, result)
 
     local snapshot_by_key = {}
     for _, item in ipairs(active.batch or {}) do
-        snapshot_by_key[item.key] = item.desired_read_state == true
+        snapshot_by_key[item.key] = {
+            desired_read_state = item.desired_read_state == true,
+            last_page_read = tonumber(item.last_page_read),
+        }
     end
 
     local ledger = self:loadChapterLedger()
     local synced = 0
     local changed = false
+    local tracker_mangas = {}
 
     for _, item in ipairs(result.failures or {}) do
         SuwayomiDebug.log({
@@ -161,15 +165,25 @@ function Methods:applyPendingReadSyncResult(active, result)
         local key = item.key
         local entry = ledger[key]
         local desired_read_state = item.desired_read_state == true
+        local snapshot = snapshot_by_key[key]
         if entry
             and entry.pending_read_sync == true
-            and snapshot_by_key[key] == desired_read_state
+            and snapshot
+            and snapshot.desired_read_state == desired_read_state
+            and snapshot.last_page_read == tonumber(entry.pending_last_page_read)
             and self:getDesiredReadStateFromLedgerEntry(entry) == desired_read_state
         then
             entry.pending_read_sync = nil
             entry.pending_read_state = nil
+            entry.pending_last_page_read = nil
             synced = synced + 1
             changed = true
+            if desired_read_state == true and entry.manga_id then
+                tracker_mangas[tostring(entry.manga_id)] = {
+                    id = tostring(entry.manga_id),
+                    title = entry.manga_title or tostring(entry.manga_id),
+                }
+            end
             if desired_read_state ~= true and not entry.path then
                 ledger[key] = nil
             end
@@ -188,6 +202,11 @@ function Methods:applyPendingReadSyncResult(active, result)
 
     if changed then
         self:saveChapterLedger(ledger)
+    end
+    if self.syncMangaTrackProgress then
+        for _, manga in pairs(tracker_mangas) do
+            self:syncMangaTrackProgress(manga)
+        end
     end
 
     return synced, tonumber(result.attempted) or #(active.batch or {})
@@ -269,8 +288,6 @@ function Methods:syncReadStateNow()
         return false
     end
 
-    self:reconcileDownloadedChapterLedger()
-
     if not self:hasPendingReadSync(self:loadChapterLedger()) then
         self:showMessage(I18n.t("Read state is already synced."))
         return false
@@ -292,29 +309,7 @@ end
 
 
 function Methods:onCloseDocument()
-    local document_path = self:getCurrentDocumentPath()
-    if not document_path or not self:isCurrentDocumentFinished() then
-        return
-    end
-
-    local ledger = self:loadChapterLedger()
-    for _, entry in pairs(ledger) do
-        if entry.path == document_path then
-            local already_read = entry.read == true
-            local marked = self:markLedgerEntryRead(entry)
-            local manga = mangaFromLedgerEntry(entry)
-            if marked and manga and self.syncMangaTrackProgress then
-                self:syncMangaTrackProgress(manga)
-            end
-            if (marked or already_read) and self.deleteFinishedChaptersWhileReading then
-                local chapter = chapterFromLedgerEntry(entry)
-                if manga and chapter then
-                    self:deleteFinishedChaptersWhileReading(manga, chapter)
-                end
-            end
-            return
-        end
-    end
+    -- No-op: reading is online-streamed, so document close has nothing to sync here.
 end
 
 
