@@ -61,8 +61,21 @@ function ActiveJobs:appendSnapshotJobs(snapshot)
     end
 end
 
+function ActiveJobs:hasSubProcessJobs()
+    for _, job in pairs(self.jobs or {}) do
+        if not job.inline then
+            return true
+        end
+    end
+    return false
+end
+
 function ActiveJobs:schedulePoll()
-    if self.poll_scheduled or self:getCount() == 0 then
+    -- Only schedule the poll watchdog when there are real subprocess jobs.
+    -- Inline jobs (job.inline=true) self-manage via stepInlineJob callbacks
+    -- and must NOT be polled -- poll() would see their dummy/nil pid as done
+    -- and incorrectly call finishWithoutProgress before the download finishes.
+    if self.poll_scheduled or not self:hasSubProcessJobs() then
         return
     end
 
@@ -193,7 +206,10 @@ function ActiveJobs:startQueuedJob(queued)
         },
     }))
 
-    queued.pid = 999999 -- dummy PID for active job tracking
+    -- Mark as an inline job so poll() skips it. Inline jobs finish via
+    -- stepInlineJob callbacks and must not be touched by the subprocess poll.
+    queued.inline = true
+    queued.pid = nil
     self:setJob(queued)
     queue:setStatus(queued.manga, queued.chapter, {
         state = "downloading",
@@ -480,6 +496,14 @@ function ActiveJobs:poll()
 
     for index = 1, #active_jobs do
         local active = active_jobs[index]
+
+        -- Inline jobs are driven entirely by stepInlineJob scheduled callbacks.
+        -- poll() must never touch them: their pid is nil so isSubProcessDone
+        -- would return true immediately, causing a spurious finishWithoutProgress.
+        if active.inline then
+            goto continue
+        end
+
         local progress = ProgressFile.read(active.progress_path)
         self:recordProgress(active, progress)
 
@@ -505,6 +529,8 @@ function ActiveJobs:poll()
                 end
             end
         end
+
+        ::continue::
     end
 
     self:process()
