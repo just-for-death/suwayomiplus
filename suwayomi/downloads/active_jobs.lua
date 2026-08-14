@@ -109,6 +109,53 @@ function ActiveJobs:runDownloaderJob(queued)
     os.exit(0)
 end
 
+function ActiveJobs:stepInlineJob(queued)
+    local queue = self.queue
+    if not queued or queued.cancelled then
+        return
+    end
+
+    if not queued.download_job then
+        local start_res = queued.downloader:startChapterDownload(
+            queued.credentials,
+            queued.download_directory,
+            queued.manga,
+            queued.chapter
+        )
+        if not start_res.ok or start_res.skipped then
+            local final_state = start_res.skipped and "skipped" or (start_res.ok and "downloaded" or "failed")
+            self:writeProgressFallback(
+                queued.progress_path,
+                final_state,
+                start_res.ok and 1 or 0,
+                start_res.ok and 1 or 0,
+                start_res.path,
+                start_res.error
+            )
+            return
+        end
+        queued.download_job = start_res.job
+        queued.total_pages = start_res.total or #start_res.job.pages
+    end
+
+    local page_res = queued.downloader:downloadNextPage(queued.download_job)
+    local page_state = page_res.ok and (page_res.done and "downloaded" or "downloading") or "failed"
+    self:writeProgressFallback(
+        queued.progress_path,
+        page_state,
+        page_res.current or 0,
+        page_res.total or queued.total_pages or 0,
+        page_res.path,
+        page_res.error
+    )
+
+    if page_res.ok and not page_res.done then
+        queue.ui_manager:scheduleIn(0.05, function()
+            self:stepInlineJob(queued)
+        end)
+    end
+end
+
 function ActiveJobs:startQueuedJob(queued)
     local queue = self.queue
     local key = queued.key or queue:getKey(queued.manga, queued.chapter)
@@ -135,33 +182,7 @@ function ActiveJobs:startQueuedJob(queued)
         },
     }))
 
-    local pid, err = queue.ffi_util.runInSubProcess(function()
-        self:runDownloaderJob(queued)
-    end)
-
-    if not pid then
-        queue:setStatus(queued.manga, queued.chapter, { state = "failed" })
-        local message = queue:formatFailureMessage(
-            queued.manga,
-            queued.chapter,
-            I18n.f("Could not start chapter download: %1", err or I18n.t("unknown error"))
-        )
-        queue:upsertPersistentJob(queue:buildPersistentJob(queued.manga, queued.chapter, queued.download_directory, "failed", {
-            started_at = queued.started_at,
-            last_progress_at = queue.now(),
-            progress = {
-                state = "failed",
-                current = 0,
-                total = 0,
-                error = message,
-                updated_at = queue.now(),
-            },
-        }))
-        queue.onMessage(message)
-        return false
-    end
-
-    queued.pid = pid
+    queued.pid = 999999 -- dummy PID for active job tracking
     self:setJob(queued)
     queue:setStatus(queued.manga, queued.chapter, {
         state = "downloading",
@@ -169,6 +190,10 @@ function ActiveJobs:startQueuedJob(queued)
         total = 0,
         purpose = queued.purpose,
     })
+
+    queue.ui_manager:scheduleIn(0.05, function()
+        self:stepInlineJob(queued)
+    end)
     return true
 end
 
