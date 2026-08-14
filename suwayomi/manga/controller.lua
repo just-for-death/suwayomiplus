@@ -25,6 +25,14 @@ end
 
 local Methods = {}
 
+local function getSimpleUIMangaModule()
+    local ok, Manga = pcall(require, "desktop_modules/module_manga")
+    if ok and Manga then return Manga end
+    ok, Manga = pcall(require, "plugins/simpleui.koplugin/desktop_modules/module_manga")
+    if ok and Manga then return Manga end
+    return nil
+end
+
 local function getLoadedMangaChapterContext(owner, manga)
     if not owner or not owner.current_chapter_context or not manga then
         return nil
@@ -406,8 +414,8 @@ function Methods:getMangaInformationActions(manga)
     end
     table.insert(actions, { id = "download", text = I18n.t("Download") })
     if manga and manga.id then
-        local ok_m, Manga = pcall(require, "desktop_modules/module_manga")
-        if ok_m and Manga then
+        local Manga = getSimpleUIMangaModule()
+        if Manga then
             local key = "suwayomi://manga/" .. tostring(manga.id)
             if Manga.isPinnedManga(key) then
                 table.insert(actions, { id = "unpin_manga", text = I18n.t("Unpin"), destructive = true })
@@ -598,8 +606,8 @@ function Methods:performMangaAction(manga, action_id, options)
         return self:confirmRemoveMangaFromLibrary(manga, options)
     end
     if action_id == "pin_manga" then
-        local ok_m, Manga = pcall(require, "desktop_modules/module_manga")
-        if ok_m and Manga then
+        local Manga = getSimpleUIMangaModule()
+        if Manga then
             local key = "suwayomi://manga/" .. tostring(manga.id)
             Manga.addPinnedManga(key, manga.title or tostring(manga.id))
             self:showMessage(I18n.t("Pinned to SimpleUI Pinned Manga"))
@@ -607,8 +615,8 @@ function Methods:performMangaAction(manga, action_id, options)
         return true
     end
     if action_id == "unpin_manga" then
-        local ok_m, Manga = pcall(require, "desktop_modules/module_manga")
-        if ok_m and Manga then
+        local Manga = getSimpleUIMangaModule()
+        if Manga then
             local key = "suwayomi://manga/" .. tostring(manga.id)
             Manga.removePinnedManga(key)
             self:showMessage(I18n.t("Unpinned from SimpleUI Pinned Manga"))
