@@ -260,6 +260,11 @@ end
 function Methods:closeStreamViewer()
     self:cancelStreamPrefetch()
     local viewer = self.stream_viewer
+    if viewer and viewer._images_list_cur then
+        pcall(function()
+            self:syncStreamPageProgress(viewer._images_list_cur)
+        end)
+    end
     self.stream_viewer = nil
     if viewer then
         UIManager:close(viewer)
