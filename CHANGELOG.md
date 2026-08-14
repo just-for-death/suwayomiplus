@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.0.3
+
+- Fix History and Updates crashing KOReader because their feed menu renderer was missing.
+- Isolate feed rendering errors so they display an error instead of terminating KOReader.
+- Make the online-reader long-press action explicit: **Select chapter from this manga**.
+- Keep automatic next-chapter opening when turning forward after the final page.
+
 ## v1.0.2
 
 - Fix chapter downloads failing with "Downloaded response was too large": chapter archives were capped at the 32 MB single-page limit, so any chapter over that size never downloaded. Archives now stream to disk with their own 512 MB budget.
