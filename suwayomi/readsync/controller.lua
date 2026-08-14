@@ -73,46 +73,24 @@ function Methods:startPendingReadSyncWorker(credentials, max_count)
         return false, #batch
     end
 
-    local result_path = self:getReadSyncResultPath()
     local active = {
         credentials = credentials,
         batch = batch,
-        result_path = result_path,
     }
+    self.pending_read_sync_active = active
 
-    active = SubprocessJob.start({
-        active = active,
-        ffi_util = FFIUtil,
-        ui_manager = UIManager,
-        poll_interval_seconds = self.read_sync_poll_interval_seconds,
-        timeout_seconds = self.read_sync_watchdog_timeout_seconds,
-        run = function(path)
-            SuwayomiReadSyncWorker:run(credentials, batch, path)
-        end,
-        read_result = function(path)
-            return SuwayomiReadSyncWorker:readResult(path)
-        end,
-        on_finish = function(finished_active, result)
-            if finished_active and finished_active.canceled then
-                return
-            end
-            local synced, attempted = self:applyPendingReadSyncResult(finished_active, result)
-            self:finishPendingReadSync(finished_active, synced, attempted)
-        end,
-        on_error = function(err)
+    UIManager:scheduleIn(0.01, function()
+        local ok, result = pcall(function()
+            return SuwayomiReadSyncWorker:run(credentials, batch, nil)
+        end)
+        if not ok or type(result) ~= "table" then
             self.pending_read_sync_active = nil
-            self:showMessage(I18n.f("Could not start read sync: %1", err or I18n.t("unknown error")))
-        end,
-        on_cleanup = function(cleaned_active)
-            if self.pending_read_sync_active == cleaned_active then
-                self.pending_read_sync_active = nil
-            end
-        end,
-    })
-    self.pending_read_sync_active = active and not active.cleaned and active or nil
-    if not active then
-        return false, #batch
-    end
+            return
+        end
+        local synced, attempted = self:applyPendingReadSyncResult(active, result)
+        self:finishPendingReadSync(active, synced, attempted)
+    end)
+
     return true, #batch
 end
 

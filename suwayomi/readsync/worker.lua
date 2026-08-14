@@ -140,7 +140,9 @@ function ReadSyncWorker:run(credentials, batch, result_path)
         self:appendGroupResult(credentials, groups[desired_read_state], desired_read_state, result)
     end
 
-    self:writeResult(result_path, result)
+    if result_path and result_path ~= "" then
+        self:writeResult(result_path, result)
+    end
     return result
 end
 
