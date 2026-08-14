@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.0.1
+
+- Fix download wiring: chapter archive API, download-aware chapter context/read actions, manga bulk downloads, reader-return fetch.
+
 ## v1.0.0
 
 - Renamed plugin to **Suwayomi+** (`suwayomiplus.koplugin`).
