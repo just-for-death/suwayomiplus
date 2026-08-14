@@ -404,11 +404,16 @@ function Methods:getMangaInformationActions(manga)
     if MangaActionMenu.canOpenFirstUnread(self, manga) then
         table.insert(actions, { id = "open_first_unread", text = I18n.t("Open next unread") })
     end
+    table.insert(actions, { id = "download", text = I18n.t("Download") })
     if manga and manga.id then
-        if manga.in_library == true then
-            table.insert(actions, { id = "remove_from_library", text = I18n.t("Remove from library"), destructive = true })
-        else
-            table.insert(actions, { id = "add_to_library", text = I18n.t("Add to library") })
+        local ok_m, Manga = pcall(require, "desktop_modules/module_manga")
+        if ok_m and Manga then
+            local key = "suwayomi://manga/" .. tostring(manga.id)
+            if Manga.isPinnedManga(key) then
+                table.insert(actions, { id = "unpin_manga", text = I18n.t("Unpin"), destructive = true })
+            else
+                table.insert(actions, { id = "pin_manga", text = I18n.t("Pin") })
+            end
         end
     end
     table.insert(actions, { id = "trackers", text = I18n.t("Trackers") })
@@ -592,11 +597,25 @@ function Methods:performMangaAction(manga, action_id, options)
     if action_id == "remove_from_library" then
         return self:confirmRemoveMangaFromLibrary(manga, options)
     end
-    if action_id == "more" then
-        self:showBulkDownloadMangaActions(manga, options)
+    if action_id == "pin_manga" then
+        local ok_m, Manga = pcall(require, "desktop_modules/module_manga")
+        if ok_m and Manga then
+            local key = "suwayomi://manga/" .. tostring(manga.id)
+            Manga.addPinnedManga(key, manga.title or tostring(manga.id))
+            self:showMessage(I18n.t("Pinned to SimpleUI Pinned Manga"))
+        end
         return true
     end
-    if action_id == "bulk_downloads" then
+    if action_id == "unpin_manga" then
+        local ok_m, Manga = pcall(require, "desktop_modules/module_manga")
+        if ok_m and Manga then
+            local key = "suwayomi://manga/" .. tostring(manga.id)
+            Manga.removePinnedManga(key)
+            self:showMessage(I18n.t("Unpinned from SimpleUI Pinned Manga"))
+        end
+        return true
+    end
+    if action_id == "download" or action_id == "more" or action_id == "bulk_downloads" then
         self:showBulkDownloadMangaActions(manga, options)
         return true
     end
@@ -654,7 +673,7 @@ function Methods:showBulkDownloadMangaActions(manga, options)
         return false
     end
     local menu = SuwayomiUI.showMangaActionsMenu({
-        title = I18n.t("Bulk downloads"),
+        title = I18n.t("Download Options"),
         actions = MangaActionMenu.buildBulkDownloadActions(),
         on_back = function()
             self:showMangaActions(manga, options)

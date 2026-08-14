@@ -100,12 +100,11 @@ end
 
 function MangaActionMenu.buildBulkDownloadActions()
     return {
-        { id = "download_first_unread", text = I18n.t("Download first unread") },
-        { id = "download_next_5_unread", text = I18n.t("Download next 5") },
-        { id = "download_next_10_unread", text = I18n.t("Download next 10") },
-        { id = "download_next_50_unread", text = I18n.t("Download next 50") },
-        { id = "download_all_unread", text = I18n.t("Download all unread") },
-        { id = "download_all_chapters", text = I18n.t("Download all chapters") },
+        { id = "download_next_10_unread", text = I18n.t("Next 10 Chapters") },
+        { id = "download_next_50_unread", text = I18n.t("Next 50 Chapters") },
+        { id = "download_next_100_unread", text = I18n.t("Next 100 Chapters") },
+        { id = "download_all_unread", text = I18n.t("All Unread Chapters") },
+        { id = "download_all_chapters", text = I18n.t("Whole Manga (All Chapters)") },
     }
 end
 
