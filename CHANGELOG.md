@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.0.4
+
+- Add real-time per-page progress sync directly hooked into page turns (`syncStreamPageProgress`).
+- Send 0-delay background GraphQL progress mutations to Suwayomi server.
+- Automatically dim / gray out read chapters in chapter list views while keeping unread chapters bold for high e-ink contrast.
+- Add **"Pin Manga (SimpleUI)"** / **"Unpin Manga (SimpleUI)"** action to Suwayomi Manga Information options menu.
+- Ensure `lastPageRead >= 1` in `updateChapter` GraphQL mutations so Suwayomi server generates valid timestamps and updates reading history order.
+- Fix UI crash by wrapping `UIManager:forceRePaint()` in safe `pcall` during loading feedback.
+
 ## v1.0.3
 
 - Fix History and Updates crashing KOReader because their feed menu renderer was missing.

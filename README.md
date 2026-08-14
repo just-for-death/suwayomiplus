@@ -7,7 +7,9 @@ A [Suwayomi](https://github.com/Suwayomi/Suwayomi-Server) client for [KOReader](
 - Browse manga in your Suwayomi library and installed sources.
 - **Stream** chapters online with next/previous/chapter-picker navigation.
 - **Download** chapters as CBZ for offline reading in KOReader's native reader.
-- Sync read state and page progress back to Suwayomi (continue on phone, iPad, etc.).
+- **Real-Time Per-Page Sync**: Instant 0-delay page progress and read state sync to Suwayomi server on every page turned.
+- **Visual Chapter Indicators**: Read chapters automatically dimmed / grayed out, unread chapters bold for high e-ink contrast.
+- **SimpleUI Integration**: Pin online or downloaded Suwayomi manga directly to SimpleUI's Pinned Manga list with one tap.
 - View Suwayomi **History** and library **Updates**.
 - Tracker sync (MAL, AniList, etc.) through Suwayomi.
 
