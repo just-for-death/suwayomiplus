@@ -190,6 +190,14 @@ function SubprocessJob.start(options)
 
     os.remove(active.result_path)
     os.remove(active.result_path .. ".tmp")
+    if not active.ffi_util or type(active.ffi_util.runInSubProcess) ~= "function" then
+        local err = "Subprocess utility unavailable"
+        if options.on_error then
+            options.on_error(err, active)
+        end
+        SubprocessJob.cleanup(active)
+        return nil, err
+    end
 
     local pid, err = active.ffi_util.runInSubProcess(function()
         if options.run then
