@@ -14,10 +14,15 @@ local REQUEST_TIMEOUT_SECONDS = 15
 local RESPONSE_TOTAL_TIMEOUT_SECONDS = 30
 local MAX_GRAPHQL_RESPONSE_BYTES = 8 * 1024 * 1024
 local MAX_BINARY_RESPONSE_BYTES = 32 * 1024 * 1024
+-- A chapter archive holds every page at once, so it needs a far larger budget
+-- than a single page. It streams straight to disk, so this only guards runaway
+-- transfers rather than memory.
+local MAX_CHAPTER_ARCHIVE_BYTES = 512 * 1024 * 1024
 local RESPONSE_TIMEOUT_ERROR = "response timeout"
 local RESPONSE_TOO_LARGE_ERROR = "response too large"
 
 Transport.MAX_BINARY_RESPONSE_BYTES = MAX_BINARY_RESPONSE_BYTES
+Transport.MAX_CHAPTER_ARCHIVE_BYTES = MAX_CHAPTER_ARCHIVE_BYTES
 
 -- LuaJIT on KOReader does not guarantee a standalone base64 helper, so this
 -- tiny encoder keeps Basic Auth construction self-contained and testable.
@@ -418,9 +423,7 @@ function Transport.downloadChapterArchive(credentials, chapter_id, target_path, 
     local tail_bytes = ""
     local write_error
     local started_at = now()
-    local max_bytes = request_options.max_bytes or MAX_BINARY_RESPONSE_BYTES
-    -- A whole chapter archive is far larger than a single page, so callers can
-    -- raise the transfer budget past the per-request default.
+    local max_bytes = request_options.max_bytes or MAX_CHAPTER_ARCHIVE_BYTES
     local total_timeout_seconds = request_options.total_timeout_seconds or RESPONSE_TOTAL_TIMEOUT_SECONDS
 
     local ok, code, response_headers = client.request{
