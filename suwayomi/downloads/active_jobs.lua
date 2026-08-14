@@ -153,6 +153,17 @@ function ActiveJobs:stepInlineJob(queued)
         queue.ui_manager:scheduleIn(0.05, function()
             self:stepInlineJob(queued)
         end)
+    else
+        self:finishFromProgress(queued, {
+            state = page_res.ok and "downloaded" or "failed",
+            current = page_res.current or 0,
+            total = page_res.total or queued.total_pages or 0,
+            path = page_res.path,
+            error = page_res.error,
+        })
+        if queue.process then
+            queue:process()
+        end
     end
 end
 

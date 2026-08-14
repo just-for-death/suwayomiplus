@@ -412,12 +412,14 @@ function SuwayomiSettings:clearSourceFilterDraft(credentials_or_url, source_id)
 end
 
 function SuwayomiSettings:getDefaultDownloadDirectory()
-    local ok_dev, Device = pcall(require, "device")
-    local base_dir = (ok_dev and Device and Device.home_dir) or "/mnt/us/koreader"
-    local downloads_dir = base_dir .. "/downloads"
+    local downloads_dir = "/mnt/us/Books/Manga"
     local ok_lfs, lfs = pcall(require, "suwayomi/fs")
     if ok_lfs and lfs then
         if lfs.attributes(downloads_dir, "mode") ~= "directory" then
+            local parent = "/mnt/us/Books"
+            if lfs.attributes(parent, "mode") ~= "directory" then
+                pcall(lfs.mkdir, parent)
+            end
             pcall(lfs.mkdir, downloads_dir)
         end
     end
