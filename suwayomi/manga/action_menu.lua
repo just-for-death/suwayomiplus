@@ -44,9 +44,10 @@ local function canOpenFirstUnread(owner, manga)
     if not chapter or not owner then
         return false
     end
-    -- Chapters that are not on the device yet are fetched into the reading
-    -- cache on open, so a local download is no longer a precondition.
-    return owner.readChapter ~= nil or owner:isChapterDownloaded(manga, chapter) == true
+    -- Online stream, native CBZ reader, or an already-downloaded archive all count.
+    return owner.streamChapter ~= nil
+        or owner.readChapter ~= nil
+        or owner:isChapterDownloaded(manga, chapter) == true
 end
 
 MangaActionMenu.canOpenFirstUnread = canOpenFirstUnread

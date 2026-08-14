@@ -87,6 +87,7 @@ local transport_exports = {
     "buildRequestHeaders",
     "buildGraphQLEndpoint",
     "buildRequestURL",
+    "buildChapterArchiveDownloadURL",
 }
 
 for _, name in ipairs(query_exports) do
@@ -432,6 +433,10 @@ end
 
 function SuwayomiAPI.downloadBinary(credentials, page_url, options)
     return transport.downloadBinary(credentials, page_url, logDebugEvent, options)
+end
+
+function SuwayomiAPI.downloadChapterArchive(credentials, chapter_id, target_path, options)
+    return transport.downloadChapterArchive(credentials, chapter_id, target_path, logDebugEvent, options)
 end
 
 function SuwayomiAPI.queryChaptersForManga(credentials, manga_id)
