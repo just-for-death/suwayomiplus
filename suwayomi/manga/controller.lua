@@ -614,7 +614,23 @@ function Methods:performMangaAction(manga, action_id, options)
             pcall(function()
                 local creds = require("suwayomi/settings"):load()
                 local tc = require("suwayomi/ui/thumbnail_cache")
-                cover_path = tc.getPath(creds, manga.thumbnailUrl, "image/jpeg", { variant = "manga_cover" })
+                local lfs = require("libs/libkoreader-lfs")
+                local url = manga.thumbnailUrl or manga.thumbnail_url
+                local variants = {
+                    { variant = "manga_cover", width = 64, height = 96 },
+                    { variant = "poster", width = 240, height = 360 },
+                    { variant = "thumbnail", width = 64, height = 96 },
+                    { variant = "poster", width = 160, height = 240 },
+                    { variant = "poster", width = 320, height = 480 },
+                    {},
+                }
+                for _, opts in ipairs(variants) do
+                    local p = tc.find(creds, url, opts)
+                    if p and lfs.attributes(p, "mode") == "file" then
+                        cover_path = p
+                        break
+                    end
+                end
             end)
             Manga.addPinnedManga(key, manga.title or tostring(manga.id), cover_path)
             self:showMessage(I18n.t("Pinned to SimpleUI Pinned Manga"))
