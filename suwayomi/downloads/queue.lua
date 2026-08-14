@@ -540,7 +540,7 @@ function DownloadQueue:recover()
                 self.statuses[job.key or self:getKey(job.manga, job.chapter)] = nil
             else
                 table.insert(recovered_jobs, job)
-                self:setStatus(job.manga, job.chapter, { state = "failed" })
+                self.statuses[self:getKey(job.manga, job.chapter)] = { state = "failed" }
             end
         end
     end
