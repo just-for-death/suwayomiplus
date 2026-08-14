@@ -637,12 +637,9 @@ function Parsers.parseChapterPagesResponse(response_body)
     local pages = data and data.pages
     local chapter = data and data.chapter
 
-    if type(pages) ~= "table" or type(chapter) ~= "table" then
+    if type(pages) ~= "table" then
         local graph_error = payload and payload.errors and payload.errors[1] and payload.errors[1].message
         return nil, graph_error or "Suwayomi server did not return chapter pages."
-    end
-    if chapter.id == nil then
-        return nil, "Suwayomi server returned invalid chapter data."
     end
     for _, page_url in ipairs(pages) do
         if type(page_url) ~= "string" or page_url == "" then
@@ -650,19 +647,23 @@ function Parsers.parseChapterPagesResponse(response_body)
         end
     end
 
-    local chapter_name = chapter.name
-    if not chapter_name or chapter_name == "" then
-        chapter_name = tostring(chapter.id)
-    end
-
-    return {
-        chapter = {
-            id = tostring(chapter.id),
+    local chapter_info = {}
+    if type(chapter) == "table" then
+        local chapter_name = chapter.name
+        if not chapter_name or chapter_name == "" then
+            chapter_name = tostring(chapter.id or "")
+        end
+        chapter_info = {
+            id = tostring(chapter.id or ""),
             name = chapter_name,
             chapter_number = chapter.chapterNumber,
             source_order = chapter.sourceOrder,
             manga_title = chapter.manga and chapter.manga.title or "",
-        },
+        }
+    end
+
+    return {
+        chapter = chapter_info,
         pages = pages,
     }
 end
