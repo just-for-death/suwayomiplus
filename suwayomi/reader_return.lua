@@ -310,7 +310,22 @@ function Methods:getReaderReturnContextForPath(path)
             return candidateFromLedgerEntry(entry)
         end
     end
-    return inferSiblingContext(path, contexts, ledger)
+
+    local context = inferSiblingContext(path, contexts, ledger)
+    local path_chapter_id = path:match("%[id%-(%d+)%]")
+    if path_chapter_id then
+        if not context then
+            for _, entry in pairs(ledger) do
+                if type(entry) == "table" and tostring(entry.chapter_id) == path_chapter_id then
+                    return candidateFromLedgerEntry(entry)
+                end
+            end
+        elseif not context.chapter_id then
+            context.chapter_id = path_chapter_id
+        end
+    end
+
+    return context
 end
 
 function Methods:getCurrentReaderReturnContext()
