@@ -610,8 +610,16 @@ function Methods:performMangaAction(manga, action_id, options)
         local Manga = getSimpleUIMangaModule()
         if Manga then
             local key = "suwayomi://manga/" .. tostring(manga.id)
-            Manga.addPinnedManga(key, manga.title or tostring(manga.id))
+            local cover_path
+            pcall(function()
+                local creds = require("suwayomi/settings"):load()
+                local tc = require("suwayomi/ui/thumbnail_cache")
+                cover_path = tc.getPath(creds, manga.thumbnailUrl, "image/jpeg", { variant = "manga_cover" })
+            end)
+            Manga.addPinnedManga(key, manga.title or tostring(manga.id), cover_path)
             self:showMessage(I18n.t("Pinned to SimpleUI Pinned Manga"))
+        else
+            self:showMessage(I18n.t("Pinned Manga module not found"))
         end
         return true
     end
