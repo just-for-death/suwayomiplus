@@ -244,7 +244,7 @@ end
 
 function Queries._buildChapterPagesQuery(chapter_id)
     return json.encode({
-        query = "mutation Pages($input: FetchChapterPagesInput!) { fetchChapterPages(input: $input) { pages chapter { id name chapterNumber sourceOrder manga { title } } } }",
+        query = "mutation Pages($input: FetchChapterPagesInput!) { fetchChapterPages(input: $input) { pages } }",
         variables = {
             input = {
                 chapterId = tonumber(chapter_id) or chapter_id,
