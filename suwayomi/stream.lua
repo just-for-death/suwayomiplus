@@ -82,8 +82,14 @@ end
 -- The chapter menu may already be gone once pages arrive, so the active stream
 -- keeps its own chapter-order snapshot.
 function Methods:getStreamChapters(manga)
+    manga = manga or (self.stream_session and self.stream_session.manga)
     local context = self.current_chapter_context
-    if self.getVisibleChapters and context and type(context.chapters) == "table" and #context.chapters > 0 then
+    -- A context left over from another title would hand the viewer the wrong
+    -- next/previous chapters, so it only counts when it matches what is open.
+    local context_matches = context
+        and context.manga
+        and (not manga or tostring(context.manga.id or "") == tostring(manga.id or ""))
+    if self.getVisibleChapters and context_matches and type(context.chapters) == "table" and #context.chapters > 0 then
         return self:getVisibleChapters(context.chapters) or {}
     end
     local session = self.stream_session
