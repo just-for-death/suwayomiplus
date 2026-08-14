@@ -314,34 +314,31 @@ function Queries._buildUpdatesQuery(first, library_filter, include_progress)
 end
 
 function Queries._buildUpdateChapterReadMutation(chapter_id, is_read)
-    return json.encode({
-        query = "mutation UPDATE_CHAPTER_READ($input: UpdateChapterInput!) { updateChapter(input: $input) { chapter { id isRead lastReadAt } } }",
-        variables = {
-            input = {
-                id = tonumber(chapter_id) or chapter_id,
-                patch = {
-                    isRead = is_read == true,
-                    lastPageRead = 1,
-                },
-            },
-        },
-    })
+    local cid = tonumber(chapter_id) or chapter_id
+    local patch_str = string.format("isRead: %s, lastPageRead: 1", is_read == true and "true" or "false")
+    local query_str
+    if type(cid) == "number" then
+        query_str = string.format("mutation { updateChapter(input: { id: %d, patch: { %s } }) { chapter { id isRead lastReadAt } } }", cid, patch_str)
+    else
+        query_str = string.format("mutation { updateChapter(input: { id: %s, patch: { %s } }) { chapter { id isRead lastReadAt } } }", json.encode(tostring(cid)), patch_str)
+    end
+    return json.encode({ query = query_str })
 end
 
 function Queries._buildUpdateChapterProgressMutation(chapter_id, is_read, last_page_read)
     local page_num = math.max(1, math.floor(tonumber(last_page_read) or 1))
-    return json.encode({
-        query = "mutation UPDATE_CHAPTER_PROGRESS($input: UpdateChapterInput!) { updateChapter(input: $input) { chapter { id isRead lastPageRead lastReadAt } } }",
-        variables = {
-            input = {
-                id = tonumber(chapter_id) or chapter_id,
-                patch = {
-                    isRead = is_read == true,
-                    lastPageRead = page_num,
-                },
-            },
-        },
-    })
+    local cid = tonumber(chapter_id) or chapter_id
+    local patch_str = string.format("lastPageRead: %d", page_num)
+    if is_read == true then
+        patch_str = patch_str .. ", isRead: true"
+    end
+    local query_str
+    if type(cid) == "number" then
+        query_str = string.format("mutation { updateChapter(input: { id: %d, patch: { %s } }) { chapter { id isRead lastPageRead lastReadAt } } }", cid, patch_str)
+    else
+        query_str = string.format("mutation { updateChapter(input: { id: %s, patch: { %s } }) { chapter { id isRead lastPageRead lastReadAt } } }", json.encode(tostring(cid)), patch_str)
+    end
+    return json.encode({ query = query_str })
 end
 
 function Queries._buildUpdateChaptersReadMutation(chapter_ids, is_read)
