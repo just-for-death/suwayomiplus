@@ -320,8 +320,15 @@ local function installControllerMethods(target, controller_module)
     end
 end
 
-for _, controller_module in ipairs(CONTROLLER_MODULES) do
-    installControllerMethods(SuwayomiPlugin, controller_module)
+function SuwayomiPlugin:onSuspend()
+    pcall(function()
+        if self.stream_session and self.stream_viewer then
+            local cur = self.stream_viewer._images_list_cur
+            if cur and cur > 0 then
+                self:syncStreamPageProgress(cur)
+            end
+        end
+    end)
 end
 
 return SuwayomiPlugin
