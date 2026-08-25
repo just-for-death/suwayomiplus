@@ -437,19 +437,42 @@ function Methods:showStreamReaderMenu()
             local next_hide = not SuwayomiSettings:loadHideStreamTitleBar()
             SuwayomiSettings:saveHideStreamTitleBar(next_hide)
             self:showMessage(next_hide and I18n.t("Top Bar hidden (Edge-to-Edge)") or I18n.t("Top Bar visible"))
-            if self.stream_viewer then
-                self.stream_viewer.with_title_bar = not next_hide
-                pcall(function() UIManager:setDirty(self.stream_viewer, "full") end)
+            local cur_session = self.stream_session
+            local cur_page = self.stream_viewer and self.stream_viewer._images_list_cur or 1
+            if cur_session and cur_session.manga and cur_session.chapter and cur_session.pages then
+                self:showChapterStream(cur_session.manga, cur_session.chapter, cur_session.pages, cur_page, { chapters = cur_session.chapters })
             end
         elseif action.id == "pin" then
             local ok_m, Manga = pcall(require, "desktop_modules/module_manga")
             if ok_m and Manga and session.manga then
-                local fp = session.manga.filepath or session.manga.title or tostring(session.manga.id or "")
+                local fp = "suwayomi://manga/" .. tostring(session.manga.id or "")
                 if Manga.isPinnedManga and Manga.isPinnedManga(fp) then
                     if Manga.removePinnedManga then Manga.removePinnedManga(fp) end
                     self:showMessage(I18n.t("Unpinned from Home"))
                 else
-                    if Manga.addPinnedManga then Manga.addPinnedManga(fp) end
+                    local cover_path
+                    pcall(function()
+                        local creds = SuwayomiSettings:load()
+                        local tc = require("suwayomi/ui/thumbnail_cache")
+                        local lfs = require("libs/libkoreader-lfs")
+                        local url = session.manga.thumbnailUrl or session.manga.thumbnail_url
+                        local variants = {
+                            { variant = "manga_cover", width = 64, height = 96 },
+                            { variant = "poster", width = 240, height = 360 },
+                            { variant = "thumbnail", width = 64, height = 96 },
+                            { variant = "poster", width = 160, height = 240 },
+                            { variant = "poster", width = 320, height = 480 },
+                            {},
+                        }
+                        for _, opts in ipairs(variants) do
+                            local p = tc.find(creds, url, opts)
+                            if p and lfs.attributes(p, "mode") == "file" then
+                                cover_path = p
+                                break
+                            end
+                        end
+                    end)
+                    if Manga.addPinnedManga then Manga.addPinnedManga(fp, session.manga.title or tostring(session.manga.id), cover_path) end
                     self:showMessage(I18n.t("Pinned to Home"))
                 end
             end
