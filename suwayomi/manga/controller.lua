@@ -632,44 +632,69 @@ function Methods:performMangaAction(manga, action_id, options)
     end
     if action_id == "pin_manga" then
         local Manga = getSimpleUIMangaModule()
-        if Manga then
-            local key = "suwayomi://manga/" .. tostring(manga.id)
-            local cover_path
+        local key = "suwayomi://manga/" .. tostring(manga.id)
+        local cover_path
+        pcall(function()
+            local creds = require("suwayomi/settings"):load()
+            local tc = require("suwayomi/ui/thumbnail_cache")
+            local lfs = require("libs/libkoreader-lfs")
+            local url = manga.thumbnailUrl or manga.thumbnail_url
+            local variants = {
+                { variant = "manga_cover", width = 64, height = 96 },
+                { variant = "poster", width = 240, height = 360 },
+                { variant = "thumbnail", width = 64, height = 96 },
+                { variant = "poster", width = 160, height = 240 },
+                { variant = "poster", width = 320, height = 480 },
+                {},
+            }
+            for _, opts in ipairs(variants) do
+                local p = tc.find(creds, url, opts)
+                if p and lfs.attributes(p, "mode") == "file" then
+                    cover_path = p
+                    break
+                end
+            end
+        end)
+        if Manga and Manga.addPinnedManga then
+            Manga.addPinnedManga(key, manga.title or tostring(manga.id), cover_path)
+        end
+        local ok_sw, SuwayomiSettings = pcall(require, "suwayomi/settings")
+        if ok_sw and SuwayomiSettings and SuwayomiSettings.savePinnedManga then
             pcall(function()
-                local creds = require("suwayomi/settings"):load()
-                local tc = require("suwayomi/ui/thumbnail_cache")
-                local lfs = require("libs/libkoreader-lfs")
-                local url = manga.thumbnailUrl or manga.thumbnail_url
-                local variants = {
-                    { variant = "manga_cover", width = 64, height = 96 },
-                    { variant = "poster", width = 240, height = 360 },
-                    { variant = "thumbnail", width = 64, height = 96 },
-                    { variant = "poster", width = 160, height = 240 },
-                    { variant = "poster", width = 320, height = 480 },
-                    {},
-                }
-                for _, opts in ipairs(variants) do
-                    local p = tc.find(creds, url, opts)
-                    if p and lfs.attributes(p, "mode") == "file" then
-                        cover_path = p
-                        break
-                    end
+                local list = SuwayomiSettings:loadPinnedManga() or {}
+                local found = false
+                for _, m in ipairs(list) do
+                    if tostring(m.id) == tostring(manga.id) then found = true; break end
+                end
+                if not found then
+                    table.insert(list, manga)
+                    SuwayomiSettings:savePinnedManga(list)
                 end
             end)
-            Manga.addPinnedManga(key, manga.title or tostring(manga.id), cover_path)
-            self:showMessage(I18n.t("Pinned to SimpleUI Pinned Manga"))
-        else
-            self:showMessage(I18n.t("Pinned Manga module not found"))
         end
+        self:showMessage(I18n.t("Pinned to SimpleUI Pinned Manga"))
         return true
     end
     if action_id == "unpin_manga" then
         local Manga = getSimpleUIMangaModule()
-        if Manga then
-            local key = "suwayomi://manga/" .. tostring(manga.id)
+        local key = "suwayomi://manga/" .. tostring(manga.id)
+        if Manga and Manga.removePinnedManga then
             Manga.removePinnedManga(key)
-            self:showMessage(I18n.t("Unpinned from SimpleUI Pinned Manga"))
         end
+        local ok_sw, SuwayomiSettings = pcall(require, "suwayomi/settings")
+        if ok_sw and SuwayomiSettings and SuwayomiSettings.savePinnedManga then
+            pcall(function()
+                local list = SuwayomiSettings:loadPinnedManga() or {}
+                local updated = {}
+                for _, m in ipairs(list) do
+                    if tostring(m.id) ~= tostring(manga.id) then
+                        table.insert(updated, m)
+                    end
+                end
+                SuwayomiSettings:savePinnedManga(updated)
+            end)
+        end
+        self:showMessage(I18n.t("Unpinned from SimpleUI Pinned Manga"))
         return true
     end
     if action_id == "download" or action_id == "more" or action_id == "bulk_downloads" then

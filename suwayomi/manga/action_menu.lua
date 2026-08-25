@@ -88,6 +88,16 @@ function MangaActionMenu.buildMainActions(owner, manga, options)
             table.insert(actions, { id = "add_to_library", text = I18n.t("Add to library") })
         end
     end
+    local ok_m, Manga = pcall(require, "desktop_modules/module_manga")
+    local is_pinned = false
+    if ok_m and Manga and Manga.isPinnedManga and manga and manga.id then
+        is_pinned = Manga.isPinnedManga("suwayomi://manga/" .. tostring(manga.id))
+    end
+    table.insert(actions, {
+        id = is_pinned and "unpin_manga" or "pin_manga",
+        text = is_pinned and I18n.t("Unpin from Pinned Manga") or I18n.t("Pin to Pinned Manga"),
+    })
+
     table.insert(actions, { id = "bulk_downloads", text = I18n.t("Bulk downloads"), submenu = true })
     table.insert(actions, { id = "keep_downloaded", text = I18n.t("Download ahead"), submenu = true })
     table.insert(actions, { id = "delete_read_downloaded", text = I18n.t("Delete read downloads"), destructive = true })
@@ -123,6 +133,8 @@ function MangaActionMenu.isSharedAction(action_id)
         or action_id == "refresh_chapters"
         or action_id == "add_to_library"
         or action_id == "remove_from_library"
+        or action_id == "pin_manga"
+        or action_id == "unpin_manga"
         or action_id == "delete_read_downloaded"
         or action_id == "download_first_unread"
         or action_id == "download_all_unread"
