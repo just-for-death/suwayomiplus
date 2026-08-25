@@ -444,10 +444,21 @@ function Methods:showStreamReaderMenu()
             end
         elseif action.id == "pin" then
             local ok_m, Manga = pcall(require, "desktop_modules/module_manga")
-            if ok_m and Manga and session.manga then
+            if session.manga then
                 local fp = "suwayomi://manga/" .. tostring(session.manga.id or "")
-                if Manga.isPinnedManga and Manga.isPinnedManga(fp) then
-                    if Manga.removePinnedManga then Manga.removePinnedManga(fp) end
+                local is_pinned = ok_m and Manga and Manga.isPinnedManga and Manga.isPinnedManga(fp)
+                if is_pinned then
+                    if ok_m and Manga and Manga.removePinnedManga then Manga.removePinnedManga(fp) end
+                    pcall(function()
+                        local list = SuwayomiSettings:loadPinnedManga() or {}
+                        local updated = {}
+                        for _, m in ipairs(list) do
+                            if tostring(m.id) ~= tostring(session.manga.id) then
+                                table.insert(updated, m)
+                            end
+                        end
+                        SuwayomiSettings:savePinnedManga(updated)
+                    end)
                     self:showMessage(I18n.t("Unpinned from Home"))
                 else
                     local cover_path
@@ -472,7 +483,20 @@ function Methods:showStreamReaderMenu()
                             end
                         end
                     end)
-                    if Manga.addPinnedManga then Manga.addPinnedManga(fp, session.manga.title or tostring(session.manga.id), cover_path) end
+                    if ok_m and Manga and Manga.addPinnedManga then
+                        Manga.addPinnedManga(fp, session.manga.title or tostring(session.manga.id), cover_path)
+                    end
+                    pcall(function()
+                        local list = SuwayomiSettings:loadPinnedManga() or {}
+                        local found = false
+                        for _, m in ipairs(list) do
+                            if tostring(m.id) == tostring(session.manga.id) then found = true; break end
+                        end
+                        if not found then
+                            table.insert(list, session.manga)
+                            SuwayomiSettings:savePinnedManga(list)
+                        end
+                    end)
                     self:showMessage(I18n.t("Pinned to Home"))
                 end
             end
