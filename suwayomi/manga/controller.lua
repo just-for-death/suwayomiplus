@@ -319,6 +319,30 @@ function Methods:startFetchChaptersForManga(manga, options)
     end, I18n.t("Could not load chapters."), "chapter_menu")
 end
 
+function Methods:resumeMangaStream(manga)
+    if not manga or not manga.id then
+        return false
+    end
+    return self:withMangaChapterContext(manga, function(context)
+        local chapters = self:getVisibleChapters(context and context.chapters or {})
+        if #chapters == 0 then
+            self:showMessage(I18n.t("This manga has no chapters."))
+            return
+        end
+        local target_chapter
+        for _, ch in ipairs(chapters) do
+            if not ch.is_read then
+                target_chapter = ch
+                break
+            end
+        end
+        if not target_chapter then
+            target_chapter = chapters[#chapters] or chapters[1]
+        end
+        self:streamChapter(manga, target_chapter, { chapters = chapters })
+    end)
+end
+
 function Methods:showChapterResultForManga(manga, result, options)
     options = options or {}
     if not result then
