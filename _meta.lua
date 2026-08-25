@@ -10,7 +10,7 @@ local I18n = require("suwayomi/i18n")
 
 return {
     name = "suwayomiplus",
-    fullname = I18n.t("Suwayomi+ v1.0.4"),
+    fullname = I18n.t("Suwayomi+ v1.1.1"),
     description = I18n.t([[Suwayomi client for KOReader: stream manga online, download chapters for offline reading, sync progress and trackers, and browse History and Updates from your server.]]),
-    version = "1.0.4",
+    version = "1.1.1",
 }

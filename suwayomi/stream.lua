@@ -25,11 +25,11 @@ function Stream:new(deps)
 end
 
 local Methods = {}
-local PREFETCH_AHEAD = 2
-local PAGE_CACHE_LIMIT = 5
+local PREFETCH_AHEAD = 5
+local PAGE_CACHE_LIMIT = 12
 -- Page fetches block the UI thread, so prefetch does one page per tick and
 -- leaves room in between for KOReader to service input.
-local PREFETCH_INTERVAL_SECONDS = 0.3
+local PREFETCH_INTERVAL_SECONDS = 0.1
 local PAGE_TIMEOUT_SECONDS = 30
 
 local function runWhenOnline(callback)
