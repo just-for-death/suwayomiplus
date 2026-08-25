@@ -320,6 +320,10 @@ local function installControllerMethods(target, controller_module)
     end
 end
 
+for _, controller_module in ipairs(CONTROLLER_MODULES) do
+    installControllerMethods(SuwayomiPlugin, controller_module)
+end
+
 function SuwayomiPlugin:onSuspend()
     pcall(function()
         if self.stream_session and self.stream_viewer then
