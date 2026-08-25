@@ -833,6 +833,8 @@ function SuwayomiSettings:saveRecentManga(entries)
             })
         end
     end
+    return self:open():saveSetting("simpleui_recent_manga", recents):flush()
+end
 function SuwayomiSettings:loadHideStreamTitleBar()
     return self:open():readSetting("hide_stream_title_bar", false) == true
 end
