@@ -375,8 +375,15 @@ function Methods:showStreamReaderMenu()
         table.insert(actions, { id = "prev", text = I18n.t("Previous chapter") })
     end
     table.insert(actions, { id = "pick", text = I18n.t("Select chapter from this manga") })
+    table.insert(actions, { id = "jump", text = I18n.t("Jump to page...") })
     if self.showMangaTrackers then
         table.insert(actions, { id = "trackers", text = I18n.t("Trackers") })
+    end
+    local ok_manga, Manga = pcall(require, "desktop_modules/module_manga")
+    if ok_manga and Manga and session.manga then
+        local fp = session.manga.filepath or session.manga.title or tostring(session.manga.id or "")
+        local pinned = Manga.isPinnedManga and Manga.isPinnedManga(fp)
+        table.insert(actions, { id = "pin", text = pinned and I18n.t("Unpin from Home") or I18n.t("Pin to Home") })
     end
     SuwayomiUI.showActionMenu({
         title = session.chapter and session.chapter.name or I18n.t("Chapter"),
@@ -392,6 +399,50 @@ function Methods:showStreamReaderMenu()
             self:streamAdjacentChapter(-1)
         elseif action.id == "pick" then
             self:showStreamChapterPicker()
+        elseif action.id == "jump" then
+            local InputDialog = require("ui/widget/inputdialog")
+            local cur = self.stream_viewer and self.stream_viewer._images_list_cur or 1
+            local total = session.pages and #session.pages or 1
+            local dialog
+            dialog = InputDialog:new{
+                title = I18n.t("Jump to Page (1 - ") .. total .. ")",
+                input = tostring(cur),
+                input_type = "number",
+                buttons = {
+                    {
+                        text = I18n.t("Cancel"),
+                        id = "cancel",
+                        callback = function() UIManager:close(dialog) end,
+                    },
+                    {
+                        text = I18n.t("Go"),
+                        is_default = true,
+                        callback = function()
+                            local page_num = tonumber(dialog:getInputText())
+                            UIManager:close(dialog)
+                            if page_num and page_num >= 1 and page_num <= total and self.stream_viewer then
+                                self.stream_viewer:switchToImageNum(page_num)
+                                self:syncStreamPageProgress(page_num)
+                                self:prefetchStreamPages(page_num)
+                            end
+                        end,
+                    },
+                },
+            }
+            UIManager:show(dialog)
+            dialog:onShowKeyboard()
+        elseif action.id == "pin" then
+            local ok_m, Manga = pcall(require, "desktop_modules/module_manga")
+            if ok_m and Manga and session.manga then
+                local fp = session.manga.filepath or session.manga.title or tostring(session.manga.id or "")
+                if Manga.isPinnedManga and Manga.isPinnedManga(fp) then
+                    if Manga.removePinnedManga then Manga.removePinnedManga(fp) end
+                    self:showMessage(I18n.t("Unpinned from Home"))
+                else
+                    if Manga.addPinnedManga then Manga.addPinnedManga(fp) end
+                    self:showMessage(I18n.t("Pinned to Home"))
+                end
+            end
         elseif action.id == "trackers" then
             self:showMangaTrackers(session.manga)
         end
@@ -581,12 +632,15 @@ function Methods:showChapterStream(manga, chapter, pages, start_page, options)
     })
 
     local ImageViewer = require("ui/widget/imageviewer")
+    local title_str = chapter and chapter.name or I18n.t("Chapter")
+    if manga and manga.title and manga.title ~= "" then
+        title_str = manga.title .. " — " .. title_str
+    end
     local viewer = ImageViewer:new{
         image = page_table,
         fullscreen = true,
         with_title_bar = true,
-        title_text = chapter and chapter.name or I18n.t("Chapter"),
-        caption = manga and manga.title or nil,
+        title_text = title_str,
         image_disposable = false,
         images_list_nb = count,
     }
