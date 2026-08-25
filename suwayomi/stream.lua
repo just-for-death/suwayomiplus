@@ -376,6 +376,8 @@ function Methods:showStreamReaderMenu()
     end
     table.insert(actions, { id = "pick", text = I18n.t("Select chapter from this manga") })
     table.insert(actions, { id = "jump", text = I18n.t("Jump to page...") })
+    local is_hidden = SuwayomiSettings:loadHideStreamTitleBar()
+    table.insert(actions, { id = "toggle_bar", text = is_hidden and I18n.t("Show Top Bar") or I18n.t("Hide Top Bar (Edge-to-Edge)") })
     if self.showMangaTrackers then
         table.insert(actions, { id = "trackers", text = I18n.t("Trackers") })
     end
@@ -431,6 +433,14 @@ function Methods:showStreamReaderMenu()
             }
             UIManager:show(dialog)
             dialog:onShowKeyboard()
+        elseif action.id == "toggle_bar" then
+            local next_hide = not SuwayomiSettings:loadHideStreamTitleBar()
+            SuwayomiSettings:saveHideStreamTitleBar(next_hide)
+            self:showMessage(next_hide and I18n.t("Top Bar hidden (Edge-to-Edge)") or I18n.t("Top Bar visible"))
+            if self.stream_viewer then
+                self.stream_viewer.with_title_bar = not next_hide
+                pcall(function() UIManager:setDirty(self.stream_viewer, "full") end)
+            end
         elseif action.id == "pin" then
             local ok_m, Manga = pcall(require, "desktop_modules/module_manga")
             if ok_m and Manga and session.manga then
@@ -636,10 +646,11 @@ function Methods:showChapterStream(manga, chapter, pages, start_page, options)
     if manga and manga.title and manga.title ~= "" then
         title_str = manga.title .. " — " .. title_str
     end
+    local hide_title = SuwayomiSettings:loadHideStreamTitleBar()
     local viewer = ImageViewer:new{
         image = page_table,
         fullscreen = true,
-        with_title_bar = true,
+        with_title_bar = not hide_title,
         title_text = title_str,
         image_disposable = false,
         images_list_nb = count,
