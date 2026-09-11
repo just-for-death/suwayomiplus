@@ -315,6 +315,24 @@ function MangaMetadata.writeChapterMetadata(path, manga, chapter)
         existing.doc_path = path
     end
 
+    -- Pre-seed manga reading defaults: full page fit (no webtoon-like vertical scroll splits)
+    -- and right-to-left reading order.
+    if existing.zoom_mode == nil then
+        existing.zoom_mode = "page"
+    end
+    if existing.normal_zoom_mode == nil then
+        existing.normal_zoom_mode = "page"
+    end
+    if existing.inverse_reading_order == nil then
+        existing.inverse_reading_order = true
+    end
+    if existing.kopt_page_scroll == nil then
+        existing.kopt_page_scroll = 0
+    end
+    if existing.flipping_scroll_mode == nil then
+        existing.flipping_scroll_mode = false
+    end
+
     return saveLuaTable(metadata_path, existing)
 end
 
