@@ -40,8 +40,8 @@ local function tryWriteChapterMetadata(final_path, manga, chapter)
     end
 end
 
--- Copy the manga folder cover from the thumbnail cache after a successful
--- chapter download. Idempotent — skips if .cover.jpg already exists.
+-- Write real JPEG folder covers (cover.jpg / folder.jpg / .cover.jpg).
+-- Rewrites broken WebP-as-.jpg or SWTHUMB1 cache copies when needed.
 local function tryWriteMangaCover(manga_dir, manga, credentials)
     if not manga_dir or not manga then return end
     pcall(function()
@@ -52,11 +52,27 @@ local function tryWriteMangaCover(manga_dir, manga, credentials)
     end)
 end
 
+-- Drop CoverBrowser bookinfo rows so a prior crash/"unsupported" mark cannot
+-- permanently hide a chapter thumb, and so rewritten folder covers re-extract.
+local function tryClearBookInfo(filepath)
+    if not filepath or filepath == "" then
+        return
+    end
+    pcall(function()
+        local ok_mm, MM = pcall(require, "suwayomi/downloads/manga_metadata")
+        if ok_mm and MM and MM.clearBookInfoCache then
+            MM.clearBookInfoCache(filepath)
+        end
+    end)
+end
+
 -- Public so active_jobs (subprocess + inline finish) can write sidecars once.
 function Downloader:writeSidecarsForChapter(final_path, manga, chapter, credentials)
     tryWriteChapterMetadata(final_path, manga, chapter)
     local manga_dir = final_path and tostring(final_path):match("^(.*)/[^/]+$")
     tryWriteMangaCover(manga_dir, manga, credentials)
+    -- Allow CoverBrowser to extract a fresh thumb for this finished CBZ.
+    tryClearBookInfo(final_path)
 end
 
 -- CRC-32 for store-method ZIP entries (Kindle FSP is unreliable with libarchive
@@ -272,12 +288,57 @@ function Downloader:findExistingChapterPath(download_directory, manga, chapter)
     return self:findExistingPathInCandidates(self:getChapterPathCandidates(download_directory, manga, chapter))
 end
 
+-- Keep incomplete downloads under a hidden folder so CoverBrowser / file
+-- manager do not index `.part.pages` dirs or half-written archives (those
+-- caused "too many interruptions" / "not readable" permanent cover failures).
+local STAGING_DIR_NAME = ".suwayomi_tmp"
+
+function Downloader:getStagingDirectory(manga_dir)
+    return tostring(manga_dir or "") .. "/" .. STAGING_DIR_NAME
+end
+
 function Downloader:getPartialPath(chapter_path)
-    return tostring(chapter_path or "") .. ".part"
+    local manga_dir, filename = tostring(chapter_path or ""):match("^(.*)/([^/]+)$")
+    if not manga_dir or manga_dir == "" or not filename or filename == "" then
+        return tostring(chapter_path or "") .. ".part"
+    end
+    return self:getStagingDirectory(manga_dir) .. "/" .. filename .. ".part"
 end
 
 function Downloader:getDirectPartialPath(chapter_path)
-    return tostring(chapter_path or "") .. ".direct.part"
+    local manga_dir, filename = tostring(chapter_path or ""):match("^(.*)/([^/]+)$")
+    if not manga_dir or manga_dir == "" or not filename or filename == "" then
+        return tostring(chapter_path or "") .. ".direct.part"
+    end
+    return self:getStagingDirectory(manga_dir) .. "/" .. filename .. ".direct.part"
+end
+
+-- Remove pre-1.3.6 staging that sat next to the final CBZ (visible to CoverBrowser).
+function Downloader:cleanupLegacyPartials(chapter_path)
+    chapter_path = tostring(chapter_path or "")
+    if chapter_path == "" then
+        return
+    end
+    self:cleanupPartialFile(chapter_path .. ".part")
+    self:cleanupPartialFile(chapter_path .. ".direct.part")
+    removeDirectoryTree(chapter_path .. ".part.pages")
+    removeDirectoryTree(chapter_path .. ".direct.part.pages")
+end
+
+-- Remove all in-progress files for one chapter (hidden staging + legacy paths).
+function Downloader:cleanupChapterStaging(chapter_path)
+    chapter_path = tostring(chapter_path or "")
+    if chapter_path == "" then
+        return false
+    end
+    self:cleanupLegacyPartials(chapter_path)
+    local partial_path = self:getPartialPath(chapter_path)
+    local direct_path = self:getDirectPartialPath(chapter_path)
+    self:cleanupPartialFile(partial_path)
+    self:cleanupPartialFile(direct_path)
+    removeDirectoryTree(tostring(partial_path) .. ".pages")
+    removeDirectoryTree(tostring(direct_path) .. ".pages")
+    return true
 end
 
 function Downloader:chapterExists(chapter_path)
@@ -305,32 +366,9 @@ function Downloader:ensureDirectory(path)
 end
 
 function Downloader:ensureMangaCover(credentials, manga_dir, manga)
-    if not manga_dir or manga_dir == "" or not manga then
-        return
-    end
-    local cover_path = manga_dir .. "/cover.jpg"
-    local folder_path = manga_dir .. "/folder.jpg"
-    if lfs.attributes(cover_path, "mode") == "file" then
-        return
-    end
-
-    local thumbnail_url = manga.thumbnailUrl or manga.thumbnail_url or (manga.manga and (manga.manga.thumbnailUrl or manga.manga.thumbnail_url))
-    if not thumbnail_url or thumbnail_url == "" then
-        return
-    end
-
-    local res = SuwayomiAPI.downloadBinary(credentials, thumbnail_url)
-    if res and res.ok and res.body and #res.body > 0 then
-        local f = io.open(cover_path, "wb")
-        if f then
-            f:write(res.body)
-            f:close()
-        end
-        local f2 = io.open(folder_path, "wb")
-        if f2 then
-            f2:write(res.body)
-            f2:close()
-        end
+    local ok_mm, MM = pcall(require, "suwayomi/downloads/manga_metadata")
+    if ok_mm and MM and MM.writeMangaCover then
+        MM.writeMangaCover(manga_dir, manga, credentials)
     end
 end
 
@@ -684,8 +722,13 @@ function Downloader:downloadDirectChapterArchive(credentials, download_directory
         return { ok = false, error = directory_error }
     end
 
+    local staging_ok, staging_error = self:ensureDirectory(self:getStagingDirectory(manga_dir))
+    if not staging_ok then
+        return { ok = false, error = staging_error or "Could not create download staging folder." }
+    end
+
+    self:cleanupChapterStaging(chapter_path)
     local partial_path = self.getDirectPartialPath and self:getDirectPartialPath(chapter_path) or self:getPartialPath(chapter_path)
-    self:cleanupPartialFile(partial_path)
 
     local archive_result = callWithTransientRetry(function()
         return SuwayomiAPI.downloadChapterArchive(credentials, chapter.id, partial_path, {
@@ -760,11 +803,17 @@ function Downloader:startChapterDownload(credentials, download_directory, manga,
         return { ok = false, error = directory_error }
     end
 
+    local staging_dir = self:getStagingDirectory(manga_dir)
+    local staging_ok, staging_error = self:ensureDirectory(staging_dir)
+    if not staging_ok then
+        return { ok = false, error = staging_error or "Could not create download staging folder." }
+    end
+
     -- Cover download is deferred to writeSidecarsForChapter after the CBZ is
     -- ready. Doing it here blocked the UI event loop for a full binary GET.
 
-    self:cleanupPartialFile(partial_path)
-    removeDirectoryTree(pages_dir)
+    -- Drop any old visible partials from before hidden staging existed.
+    self:cleanupChapterStaging(chapter_path)
     local pages_ok, pages_error = self:ensureDirectory(pages_dir)
     if not pages_ok then
         return { ok = false, error = pages_error or "Could not create chapter page folder." }
@@ -798,6 +847,17 @@ function Downloader:validatePage(binary)
     local content_type = tostring(binary.content_type or ""):lower()
     if not content_type:match("^image/") then
         return false, "Downloaded chapter page was not an image."
+    end
+
+    -- Reject Suwayomi UI cache blobs / HTML error pages mislabeled as images.
+    local body = binary.body
+    local b0, b1, b2 = body:byte(1, 3)
+    local is_jpeg = b0 == 0xFF and b1 == 0xD8 and b2 == 0xFF
+    local is_png = body:sub(1, 8) == "\137PNG\r\n\26\n"
+    local is_webp = #body >= 12 and body:sub(1, 4) == "RIFF" and body:sub(9, 12) == "WEBP"
+    local is_gif = body:sub(1, 6) == "GIF87a" or body:sub(1, 6) == "GIF89a"
+    if not (is_jpeg or is_png or is_webp or is_gif) then
+        return false, "Downloaded chapter page had an invalid image header."
     end
 
     return true
@@ -973,9 +1033,7 @@ function Downloader:downloadChapter(credentials, download_directory, manga, chap
     local direct_result = self:downloadDirectChapterArchive(credentials, download_directory, manga, chapter)
     if direct_result then
         if direct_result.ok and direct_result.path then
-            tryWriteChapterMetadata(direct_result.path, manga, chapter)
-            local manga_dir = direct_result.path:match("^(.*)/[^/]+$")
-            tryWriteMangaCover(manga_dir, manga, credentials)
+            self:writeSidecarsForChapter(direct_result.path, manga, chapter, credentials)
         end
         return direct_result
     end
@@ -983,9 +1041,7 @@ function Downloader:downloadChapter(credentials, download_directory, manga, chap
     local start_result = self:startChapterDownload(credentials, download_directory, manga, chapter)
     if not start_result.ok or start_result.skipped then
         if start_result.ok and start_result.path then
-            tryWriteChapterMetadata(start_result.path, manga, chapter)
-            local manga_dir = start_result.path:match("^(.*)/[^/]+$")
-            tryWriteMangaCover(manga_dir, manga, credentials)
+            self:writeSidecarsForChapter(start_result.path, manga, chapter, credentials)
         end
         return start_result
     end
@@ -1000,9 +1056,7 @@ function Downloader:downloadChapter(credentials, download_directory, manga, chap
 
     local final_path = (result and result.path) or start_result.path
     if final_path then
-        tryWriteChapterMetadata(final_path, manga, chapter)
-        local manga_dir = final_path:match("^(.*)/[^/]+$")
-        tryWriteMangaCover(manga_dir, manga, credentials)
+        self:writeSidecarsForChapter(final_path, manga, chapter, credentials)
     end
     return { ok = true, skipped = result and result.skipped, path = final_path }
 end
@@ -1011,9 +1065,7 @@ function Downloader:downloadChapterWithProgress(credentials, download_directory,
     local direct_result = self:downloadDirectChapterArchive(credentials, download_directory, manga, chapter)
     if direct_result then
         if direct_result.ok and direct_result.path then
-            tryWriteChapterMetadata(direct_result.path, manga, chapter)
-            local manga_dir = direct_result.path:match("^(.*)/[^/]+$")
-            tryWriteMangaCover(manga_dir, manga, credentials)
+            self:writeSidecarsForChapter(direct_result.path, manga, chapter, credentials)
         end
         self:writeProgress(
             progress_path,
@@ -1029,9 +1081,7 @@ function Downloader:downloadChapterWithProgress(credentials, download_directory,
     local start_result = self:startChapterDownload(credentials, download_directory, manga, chapter)
     if not start_result.ok or start_result.skipped then
         if start_result.ok and start_result.path then
-            tryWriteChapterMetadata(start_result.path, manga, chapter)
-            local manga_dir = start_result.path:match("^(.*)/[^/]+$")
-            tryWriteMangaCover(manga_dir, manga, credentials)
+            self:writeSidecarsForChapter(start_result.path, manga, chapter, credentials)
         end
         self:writeProgress(
             progress_path,
@@ -1062,9 +1112,7 @@ function Downloader:downloadChapterWithProgress(credentials, download_directory,
 
     local final_path = (result and result.path) or start_result.path
     if final_path then
-        tryWriteChapterMetadata(final_path, manga, chapter)
-        local manga_dir = final_path:match("^(.*)/[^/]+$")
-        tryWriteMangaCover(manga_dir, manga, credentials)
+        self:writeSidecarsForChapter(final_path, manga, chapter, credentials)
     end
     return { ok = true, skipped = result and result.skipped, path = final_path }
 end

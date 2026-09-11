@@ -424,6 +424,9 @@ function DownloadQueue:cleanupInterruptedDownload(job)
         return false
     end
     local chapter_path = select(2, self.downloader:getTargetPath(job.download_directory, job.manga, job.chapter))
+    if self.downloader.cleanupChapterStaging then
+        return self.downloader:cleanupChapterStaging(chapter_path)
+    end
     local partial_path = self.downloader.getPartialPath and self.downloader:getPartialPath(chapter_path) or (chapter_path .. ".part")
     os.remove(partial_path)
     if self.downloader.getDirectPartialPath then

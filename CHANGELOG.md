@@ -1,5 +1,23 @@
 # Changelog
 
+## v1.3.7
+
+- Write chapter sidecars to KOReader's real location (`file.sdr`, not `file.cbz.sdr`) and migrate any legacy `.cbz.sdr` folders.
+- Merge chapter sidecar metadata instead of overwriting reader progress; always keep series/title/Suwayomi IDs.
+- Rebuild `.manga_index.lua` from every on-disk CBZ so early chapters are never dropped from the index.
+- Add `repairMangaDirectory` to fix metadata/covers/bookinfo for a whole manga folder.
+- Mark visible `cover.jpg` / `folder.jpg` as ignored in CoverBrowser; prefer hidden `.cover.jpg` for MaxOutUI.
+- Validate downloaded page bytes are real JPEG/PNG/WebP/GIF before packing CBZs.
+
+## v1.3.6
+
+- Keep in-progress downloads under a hidden `.suwayomi_tmp/` folder so CoverBrowser never indexes `.part.pages` dirs or half-written archives.
+- After each finished chapter (and rewritten folder covers), clear CoverBrowser bookinfo rows so a crash-time "too many interruptions" mark cannot permanently hide thumbnails.
+
+## v1.3.5
+
+- Fix manga folder covers: download the real thumbnail and write proper JPEGs to `cover.jpg`, `folder.jpg`, and `.cover.jpg` (no more WebP-as-`.jpg` or SWTHUMB1 cache copies that show as lines).
+
 ## v1.0.4
 
 - Add real-time per-page progress sync directly hooked into page turns (`syncStreamPageProgress`).
