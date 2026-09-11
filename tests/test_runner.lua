@@ -106,6 +106,7 @@ run_suite("Chapter Path",               "test_chapter_path.lua")
 run_suite("Continue Reading Network",   "test_continue_reading_network.lua")
 run_suite("Chapter Ledger Page",        "test_chapter_ledger_page.lua")
 run_suite("Settings Defaults",          "test_settings_defaults.lua")
+run_suite("Manga Hold Action",          "test_manga_hold_action.lua")
 
 -- ---------------------------------------------------------------------------
 -- Summary

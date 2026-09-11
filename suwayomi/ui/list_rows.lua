@@ -84,7 +84,8 @@ end
 
 function ListRows.buildMangaRow(manga, options)
     options = options or {}
-    return {
+    local on_hold = options.on_hold or options.hold_callback or options.onMenuHold
+    local row = {
         text = ListRows.getMangaTitle(manga),
         subtitle = ListRows.getMangaSubtitle(manga),
         mandatory = ListRows.getMangaMandatory(manga, options),
@@ -100,6 +101,12 @@ function ListRows.buildMangaRow(manga, options)
             end
         end,
     }
+    if on_hold then
+        row.hold_callback = function()
+            on_hold(manga)
+        end
+    end
+    return row
 end
 
 function ListRows.buildMangaMenuTable(manga_list, options)

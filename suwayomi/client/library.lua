@@ -190,6 +190,31 @@ function SuwayomiClient:showLibraryMangaResult(category, credentials, result)
         end
     end
 
+    local function onMangaHold(selected_manga)
+        if not selected_manga then
+            return
+        end
+        if self.plugin.showMangaActions then
+            self.plugin:showMangaActions(selected_manga, {
+                force_menu = true,
+                onMangaUpdated = refreshLibraryMangaMenu,
+            })
+        elseif self.ui.showMangaActionsMenu and self.plugin.getMangaActions then
+            self.ui.showMangaActionsMenu({
+                title = selected_manga.title or tostring(selected_manga.id),
+                actions = self.plugin:getMangaActions(selected_manga),
+            }, function(action)
+                if action and self.plugin.performMangaAction then
+                    self.plugin:performMangaAction(selected_manga, action.id, {
+                        onMangaUpdated = refreshLibraryMangaMenu,
+                    })
+                end
+            end)
+        end
+    end
+
+    menu_options.on_hold = onMangaHold
+
     library_menu = self.ui.showLibraryMangaMenu(library_manga, function(selected_manga)
         if self.plugin.showMangaActions then
             self.plugin:showMangaActions(selected_manga, {

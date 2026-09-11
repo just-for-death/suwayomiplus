@@ -523,7 +523,7 @@ function Methods:showMangaActions(manga, options)
         )
     end
 
-    if SuwayomiUI.showMangaInformation then
+    if not (action_options and (action_options.force_menu or action_options.skip_manga_information)) and SuwayomiUI.showMangaInformation then
         return self:performMangaAction(manga, "manga_information", action_options)
     end
 

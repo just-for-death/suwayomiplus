@@ -487,7 +487,22 @@ function ListMenuItem:onTapSelect()
 end
 
 function ListMenuItem:onHoldSelect()
-    self.menu:onMenuHold(self.entry)
+    if self[1] and self[1].dimen then
+        local ok, UIManager = pcall(require, "ui/uimanager")
+        if ok and UIManager and not (G_reader_settings and G_reader_settings:isFalse("flash_ui")) then
+            pcall(function()
+                UIManager:widgetInvert(self[1], self[1].dimen.x, self[1].dimen.y)
+                UIManager:setDirty(nil, "ui", self[1].dimen)
+            end)
+        end
+    end
+    if self.entry and self.entry.hold_callback then
+        self.entry.hold_callback()
+        return true
+    end
+    if self.menu and self.menu.onMenuHold then
+        return self.menu:onMenuHold(self.entry)
+    end
     return true
 end
 
@@ -981,6 +996,7 @@ function ListMenu.install(menu, options)
         local original_on_close_widget = menu.onCloseWidget
         local original_on_close = menu.onClose
         local original_on_menu_select = menu.onMenuSelect
+        local original_on_menu_hold = menu.onMenuHold
         menu._suwayomi_original_recalculate_dimen = menu._recalculateDimen
         menu._recalculateDimen = function(self, no_recalculate_dimen)
             return ListMenu.recalculateDimen(self, no_recalculate_dimen)
@@ -1013,6 +1029,19 @@ function ListMenu.install(menu, options)
             end
             return false
         end
+        menu.onMenuHold = function(self, item, ...)
+            if item and item.hold_callback then
+                item.hold_callback()
+                return true
+            end
+            if type(self._suwayomi_on_hold) == "function" then
+                return self._suwayomi_on_hold(item, ...)
+            end
+            if original_on_menu_hold then
+                return original_on_menu_hold(self, item, ...)
+            end
+            return false
+        end
         menu.onCloseWidget = function(self, ...)
             cancelThumbnailJobs(self)
             if original_on_close_widget then
@@ -1028,6 +1057,7 @@ local function applyOptions(menu, options)
     menu_utils.applyCloseCallback(menu, options)
     menu._suwayomi_thumbnail_credentials = options and options.thumbnail_credentials
     menu._suwayomi_on_close = options and options.on_close
+    menu._suwayomi_on_hold = options and (options.on_hold or options.onMenuHold)
     local on_page_changed = options and options.on_page_changed
     if menu._suwayomi_on_page_changed ~= on_page_changed then
         menu._suwayomi_last_notified_page = nil

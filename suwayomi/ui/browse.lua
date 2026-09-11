@@ -924,6 +924,7 @@ local function buildMangaMenuTable(manga_list, onSelectCallback, options)
     for _ , row in ipairs(ListRows.buildMangaMenuTable(manga_list, {
         show_in_library = true,
         on_select = onSelectCallback,
+        on_hold = options.on_hold or options.onHoldCallback,
     })) do
         if type(row.manga) == "table" and row.manga.raw_menu_row == true then
             table.insert(menu_table, row.manga)
@@ -953,6 +954,7 @@ function BrowseUI.showMangaMenu(manga_list, onSelectCallback, options)
         on_title_bar_left_hold = options.on_title_bar_left_hold,
         thumbnail_credentials = options.thumbnail_credentials,
         on_page_changed = options.on_page_changed,
+        on_hold = options.on_hold or options.onHoldCallback,
     }
 end
 
@@ -972,6 +974,7 @@ function BrowseUI.updateMangaMenu(menu, manga_list, onSelectCallback, options)
         on_title_bar_left_hold = options.on_title_bar_left_hold,
         thumbnail_credentials = options.thumbnail_credentials,
         on_page_changed = options.on_page_changed,
+        on_hold = options.on_hold or options.onHoldCallback,
     })
 end
 
@@ -989,11 +992,13 @@ function BrowseUI.showLibraryCategoryMenu(categories, onSelectCallback, options)
     }
 end
 
-local function buildLibraryMangaMenuTable(manga_list, onSelectCallback)
+local function buildLibraryMangaMenuTable(manga_list, onSelectCallback, options)
+    options = options or {}
     return ListRows.buildMangaMenuTable(manga_list, {
         show_in_library = false,
         show_unread_count = true,
         on_select = onSelectCallback,
+        on_hold = options.on_hold or options.onHoldCallback,
     })
 end
 
@@ -1002,11 +1007,12 @@ function BrowseUI.showLibraryMangaMenu(manga_list, onSelectCallback, options)
     return getListMenu().show{
         title = I18n.t("Suwayomi Library"),
         title_bar_left_icon = options.title_bar_left_icon,
-        item_table = buildLibraryMangaMenuTable(manga_list, onSelectCallback),
+        item_table = buildLibraryMangaMenuTable(manga_list, onSelectCallback, options),
         close_callback = options.close_callback,
         on_title_bar_left_tap = options.on_title_bar_left_tap,
         on_title_bar_left_hold = options.on_title_bar_left_hold,
         thumbnail_credentials = options.thumbnail_credentials,
+        on_hold = options.on_hold or options.onHoldCallback,
     }
 end
 
@@ -1019,11 +1025,12 @@ function BrowseUI.updateLibraryMangaMenu(menu, manga_list, onSelectCallback, opt
     return getListMenu().update(menu, {
         title = I18n.t("Suwayomi Library"),
         title_bar_left_icon = options.title_bar_left_icon,
-        item_table = buildLibraryMangaMenuTable(manga_list, onSelectCallback),
+        item_table = buildLibraryMangaMenuTable(manga_list, onSelectCallback, options),
         close_callback = options.close_callback,
         on_title_bar_left_tap = options.on_title_bar_left_tap,
         on_title_bar_left_hold = options.on_title_bar_left_hold,
         thumbnail_credentials = options.thumbnail_credentials,
+        on_hold = options.on_hold or options.onHoldCallback,
     })
 end
 
