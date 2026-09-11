@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.3.8
+
+- Fix download-queue busy-loop when an inline job is deferred while another job is active (`max_parallel > 1`).
+- Set chapter status to `downloaded`/`skipped` on successful `finishFromProgress` (not only on the failed-but-archive-exists path).
+- Heal stale `downloading`/`queued`/`failed` menu status when the chapter archive already exists on disk.
+- Prefer KOReader `file.sdr` sidecars, fall back to legacy `file.cbz.sdr`, and use `DocSettings:getSidecarDir` when available.
+- Defer manga cover HTTP off the download hot path via `UIManager:scheduleIn`.
+- Persist richer manga fields in JobStore (`author`, `artist`, `description`, thumbnail URLs).
+- Stream CRC-32 for STORED zip packing in 64KB chunks instead of reading whole pages into memory for checksums.
+- Remove empty `.suwayomi_tmp` staging directories after cleanup/finalize.
+
 ## v1.3.7
 
 - Write chapter sidecars to KOReader's real location (`file.sdr`, not `file.cbz.sdr`) and migrate any legacy `.cbz.sdr` folders.

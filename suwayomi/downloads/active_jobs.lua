@@ -216,10 +216,12 @@ end
 function ActiveJobs:startInlineJob(queued)
     local queue = self.queue
     -- Inline = sync HTTP on the UI thread. Only allow one, and only when fork fails.
+    -- Requeue at the END so process() cannot busy-loop on the same deferred item
+    -- when max_parallel > 1 and another job is already active.
     if self:getCount() > 0 then
-        table.insert(queue.items, 1, queued)
+        table.insert(queue.items, queued)
         queue:setStatus(queued.manga, queued.chapter, { state = "queued", purpose = queued.purpose })
-        return false
+        return false, "deferred"
     end
     queued.inline = true
     queued.pid = nil
@@ -306,8 +308,13 @@ function ActiveJobs:process()
             break
         end
 
-        if self:startQueuedJob(queued) then
+        local started, reason = self:startQueuedJob(queued)
+        if started then
             started_count = started_count + 1
+        elseif reason == "deferred" then
+            -- Inline start was deferred because another job is active; stop
+            -- draining the queue this tick so we do not spin on the same item.
+            break
         end
     end
 
@@ -479,6 +486,12 @@ function ActiveJobs:finishFromProgress(active, progress)
             active.chapter,
             archive_path
         )
+        queue:setStatus(active.manga, active.chapter, {
+            state = (progress.state == "skipped") and "skipped" or "downloaded",
+            current = progress.current,
+            total = progress.total,
+            purpose = active.purpose,
+        })
     elseif progress and progress.state == "failed" and queue:jobArchiveExists(active, progress) then
         -- A downloader may report failure after writing a valid CBZ. Keep the
         -- user-facing state aligned with the archive that now exists on disk.

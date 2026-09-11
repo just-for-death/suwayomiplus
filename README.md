@@ -37,7 +37,7 @@ Books/Manga/<Source>/<Manga Title>/
   .cover.jpg
   .manga_index.lua
   Ch. 001 - Romance Dawn [id-123].cbz
-  Ch. 001 - Romance Dawn [id-123].cbz.sdr/metadata.cbz.lua
+  Ch. 001 - Romance Dawn [id-123].sdr/metadata.cbz.lua
   Ch. 002 - ...
 ```
 

@@ -45,17 +45,49 @@ function Methods:getKoreaderMetadataPathForDocument(document_path)
         return nil
     end
 
-    local sdr_dir = base_path .. ".sdr"
-    if ext and ext ~= "" then
-        local typed_path = sdr_dir .. "/metadata." .. ext .. ".lua"
+    local function fileExists(path)
         local ok, lfs = pcall(require, "suwayomi/fs")
-        if ok and lfs and lfs.attributes and lfs.attributes(typed_path, "mode") == "file" then
-            return typed_path
-        end
-        return typed_path
+        return ok and lfs and lfs.attributes and lfs.attributes(path, "mode") == "file"
     end
 
-    return sdr_dir .. "/metadata.lua"
+    -- Prefer KOReader's DocSettings sidecar dir when available (strips extension → file.sdr).
+    local preferred_sdr = base_path .. ".sdr"
+    local ok_ds, DocSettings = pcall(require, "docsettings")
+    if ok_ds and DocSettings and type(DocSettings.getSidecarDir) == "function" then
+        local ok_sidecar, sidecar = pcall(DocSettings.getSidecarDir, DocSettings, document_path)
+        if not ok_sidecar or type(sidecar) ~= "string" or sidecar == "" then
+            -- Some builds expose a free function rather than a method.
+            ok_sidecar, sidecar = pcall(DocSettings.getSidecarDir, document_path)
+        end
+        if ok_sidecar and type(sidecar) == "string" and sidecar ~= "" then
+            preferred_sdr = sidecar
+        end
+    end
+
+    -- Legacy Suwayomi+ path kept the full filename: file.cbz.sdr/
+    local legacy_sdr = document_path .. ".sdr"
+
+    if ext and ext ~= "" then
+        local preferred_path = preferred_sdr .. "/metadata." .. ext .. ".lua"
+        local legacy_path = legacy_sdr .. "/metadata." .. ext .. ".lua"
+        if fileExists(preferred_path) then
+            return preferred_path
+        end
+        if fileExists(legacy_path) then
+            return legacy_path
+        end
+        return preferred_path
+    end
+
+    local preferred_path = preferred_sdr .. "/metadata.lua"
+    local legacy_path = legacy_sdr .. "/metadata.lua"
+    if fileExists(preferred_path) then
+        return preferred_path
+    end
+    if fileExists(legacy_path) then
+        return legacy_path
+    end
+    return preferred_path
 end
 
 

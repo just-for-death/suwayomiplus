@@ -148,6 +148,11 @@ function JobStore:copyMangaMetadata(manga)
         id = manga.id,
         title = manga.title,
     }
+    for _, key in ipairs({ "author", "artist", "description", "thumbnail_url", "thumbnailUrl" }) do
+        if manga[key] ~= nil then
+            copied[key] = manga[key]
+        end
+    end
     local source = self:copySourceMetadata(manga.source)
     if source then
         copied.source = source

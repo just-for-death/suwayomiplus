@@ -42,14 +42,23 @@ end
 
 -- Write real JPEG folder covers (cover.jpg / folder.jpg / .cover.jpg).
 -- Rewrites broken WebP-as-.jpg or SWTHUMB1 cache copies when needed.
+-- Cover HTTP is deferred off the download hot path so the UI stays responsive.
 local function tryWriteMangaCover(manga_dir, manga, credentials)
     if not manga_dir or not manga then return end
-    pcall(function()
-        local ok_mm, MM = pcall(require, "suwayomi/downloads/manga_metadata")
-        if ok_mm and MM and MM.writeMangaCover then
-            MM.writeMangaCover(manga_dir, manga, credentials)
-        end
-    end)
+    local function write_cover()
+        pcall(function()
+            local ok_mm, MM = pcall(require, "suwayomi/downloads/manga_metadata")
+            if ok_mm and MM and MM.writeMangaCover then
+                MM.writeMangaCover(manga_dir, manga, credentials)
+            end
+        end)
+    end
+    local ok_ui, UIManager = pcall(require, "ui/uimanager")
+    if ok_ui and UIManager and UIManager.scheduleIn then
+        UIManager:scheduleIn(0.2, write_cover)
+    else
+        write_cover()
+    end
 end
 
 -- Drop CoverBrowser bookinfo rows so a prior crash/"unsupported" mark cannot
@@ -78,25 +87,45 @@ end
 -- CRC-32 for store-method ZIP entries (Kindle FSP is unreliable with libarchive
 -- streaming writes, so we prefer a simple STORED zip built with plain file IO).
 local crc_table
-local function crc32(data)
-    if not crc_table then
-        crc_table = {}
-        for i = 0, 255 do
-            local c = i
-            for _ = 1, 8 do
-                if c % 2 == 1 then
-                    c = bit.bxor(bit.rshift(c, 1), 0xEDB88320)
-                else
-                    c = bit.rshift(c, 1)
-                end
-            end
-            crc_table[i] = c
-        end
+local CRC_CHUNK_SIZE = 64 * 1024
+
+local function ensureCrcTable()
+    if crc_table then
+        return
     end
-    local crc = 0xFFFFFFFF
+    crc_table = {}
+    for i = 0, 255 do
+        local c = i
+        for _ = 1, 8 do
+            if c % 2 == 1 then
+                c = bit.bxor(bit.rshift(c, 1), 0xEDB88320)
+            else
+                c = bit.rshift(c, 1)
+            end
+        end
+        crc_table[i] = c
+    end
+end
+
+local function crc32Update(crc, data)
     for i = 1, #data do
         local b = data:byte(i)
         crc = bit.bxor(bit.rshift(crc, 8), crc_table[bit.band(bit.bxor(crc, b), 0xFF)])
+    end
+    return crc
+end
+
+-- Stream CRC from an open file handle (64KB chunks) so large pages do not need
+-- a second full in-memory copy just for the checksum.
+local function crc32FromHandle(handle)
+    ensureCrcTable()
+    local crc = 0xFFFFFFFF
+    while true do
+        local chunk = handle:read(CRC_CHUNK_SIZE)
+        if not chunk or chunk == "" then
+            break
+        end
+        crc = crc32Update(crc, chunk)
     end
     -- LuaJIT bit ops are signed; keep CRC in unsigned 32-bit range for ZIP headers.
     return bit.band(bit.bxor(crc, 0xFFFFFFFF), 0xFFFFFFFF)
@@ -119,6 +148,8 @@ end
 
 -- Build a STORED (no compression) zip from on-disk page files.
 -- Avoids Archiver.Writer:addFileFromMemory "Write error" on Kindle FSP.
+-- CRC and payload are streamed in chunks so packing does not hold two full
+-- page buffers (CRC + write) at once.
 local function writeStoredZipFromFiles(zip_path, files)
     local out = io.open(zip_path, "wb")
     if not out then
@@ -133,12 +164,13 @@ local function writeStoredZipFromFiles(zip_path, files)
             os.remove(zip_path)
             return false, "Could not read downloaded page file."
         end
-        local data = handle:read("*a") or ""
-        handle:close()
+        local size = handle:seek("end") or 0
+        handle:seek("set")
+        local crc = crc32FromHandle(handle)
+        handle:seek("set")
+
         local offset = out:seek()
         local name = file.name
-        local crc = crc32(data)
-        local size = #data
         -- Local file header (STORED)
         out:write("PK\003\004")
         out:write(u16(20))      -- version needed
@@ -152,7 +184,14 @@ local function writeStoredZipFromFiles(zip_path, files)
         out:write(u16(#name))
         out:write(u16(0))       -- extra len
         out:write(name)
-        out:write(data)
+        while true do
+            local chunk = handle:read(CRC_CHUNK_SIZE)
+            if not chunk or chunk == "" then
+                break
+            end
+            out:write(chunk)
+        end
+        handle:close()
         entries[#entries + 1] = {
             name = name,
             crc = crc,
@@ -326,6 +365,22 @@ function Downloader:cleanupLegacyPartials(chapter_path)
 end
 
 -- Remove all in-progress files for one chapter (hidden staging + legacy paths).
+function Downloader:pruneEmptyStagingDirectory(manga_dir)
+    local staging = self:getStagingDirectory(manga_dir)
+    if not staging or staging == "" or staging == "/" .. STAGING_DIR_NAME then
+        return
+    end
+    if not lfs.attributes or lfs.attributes(staging, "mode") ~= "directory" then
+        return
+    end
+    for name in lfs.dir(staging) do
+        if name ~= "." and name ~= ".." then
+            return
+        end
+    end
+    lfs.rmdir(staging)
+end
+
 function Downloader:cleanupChapterStaging(chapter_path)
     chapter_path = tostring(chapter_path or "")
     if chapter_path == "" then
@@ -338,6 +393,10 @@ function Downloader:cleanupChapterStaging(chapter_path)
     self:cleanupPartialFile(direct_path)
     removeDirectoryTree(tostring(partial_path) .. ".pages")
     removeDirectoryTree(tostring(direct_path) .. ".pages")
+    local manga_dir = chapter_path:match("^(.*)/[^/]+$")
+    if manga_dir and manga_dir ~= "" then
+        self:pruneEmptyStagingDirectory(manga_dir)
+    end
     return true
 end
 
@@ -664,30 +723,38 @@ function Downloader:isZipArchiveResult(archive_result, archive_path)
 end
 
 function Downloader:finalizePartialArchive(partial_path, chapter_path, existing_path)
+    local function finish(result)
+        local manga_dir = tostring(chapter_path or ""):match("^(.*)/[^/]+$")
+        if manga_dir and manga_dir ~= "" then
+            self:pruneEmptyStagingDirectory(manga_dir)
+        end
+        return result
+    end
+
     if existing_path then
         self:cleanupPartialFile(partial_path)
-        return {
+        return finish({
             ok = true,
             skipped = true,
             path = existing_path,
-        }
+        })
     end
 
     local renamed, rename_error = os.rename(partial_path, chapter_path)
     if renamed then
-        return {
+        return finish({
             ok = true,
             path = chapter_path,
-        }
+        })
     end
 
     if self:chapterExists(chapter_path) then
         self:cleanupPartialFile(partial_path)
-        return {
+        return finish({
             ok = true,
             skipped = true,
             path = chapter_path,
-        }
+        })
     end
 
     self:cleanupPartialFile(partial_path)
@@ -695,11 +762,11 @@ function Downloader:finalizePartialArchive(partial_path, chapter_path, existing_
     if rename_error and tostring(rename_error) ~= "" then
         error_message = error_message .. " " .. tostring(rename_error)
     end
-    return {
+    return finish({
         ok = false,
         error = error_message,
         path = chapter_path,
-    }
+    })
 end
 
 function Downloader:downloadDirectChapterArchive(credentials, download_directory, manga, chapter)
@@ -722,12 +789,11 @@ function Downloader:downloadDirectChapterArchive(credentials, download_directory
         return { ok = false, error = directory_error }
     end
 
+    self:cleanupChapterStaging(chapter_path)
     local staging_ok, staging_error = self:ensureDirectory(self:getStagingDirectory(manga_dir))
     if not staging_ok then
         return { ok = false, error = staging_error or "Could not create download staging folder." }
     end
-
-    self:cleanupChapterStaging(chapter_path)
     local partial_path = self.getDirectPartialPath and self:getDirectPartialPath(chapter_path) or self:getPartialPath(chapter_path)
 
     local archive_result = callWithTransientRetry(function()
@@ -897,6 +963,14 @@ function Downloader:packPageFiles(job)
 end
 
 function Downloader:finalizeChapterArchive(job)
+    local function finish(result)
+        local manga_dir = tostring(job and job.chapter_path or ""):match("^(.*)/[^/]+$")
+        if manga_dir and manga_dir ~= "" then
+            self:pruneEmptyStagingDirectory(manga_dir)
+        end
+        return result
+    end
+
     local written = job.written
     if written == nil then
         written = job.current
@@ -905,27 +979,27 @@ function Downloader:finalizeChapterArchive(job)
     if written ~= #job.pages then
         self:cleanupPartialFile(job.partial_path)
         removeDirectoryTree(job.pages_dir)
-        return {
+        return finish({
             ok = false,
             error = "Chapter archive page count did not match Suwayomi page count.",
             current = job.current,
             total = #job.pages,
             path = job.chapter_path,
-        }
+        })
     end
 
     local existing_path = self:findExistingPathInCandidates(job.chapter_path_candidates)
     if existing_path then
         self:cleanupPartialFile(job.partial_path)
         removeDirectoryTree(job.pages_dir)
-        return {
+        return finish({
             ok = true,
             done = true,
             skipped = true,
             current = job.current,
             total = #job.pages,
             path = existing_path,
-        }
+        })
     end
 
     local renamed, rename_error = os.rename(job.partial_path, job.chapter_path)
@@ -933,14 +1007,14 @@ function Downloader:finalizeChapterArchive(job)
         if self:chapterExists(job.chapter_path) then
             self:cleanupPartialFile(job.partial_path)
             removeDirectoryTree(job.pages_dir)
-            return {
+            return finish({
                 ok = true,
                 done = true,
                 skipped = true,
                 current = job.current,
                 total = #job.pages,
                 path = job.chapter_path,
-            }
+            })
         end
         self:cleanupPartialFile(job.partial_path)
         removeDirectoryTree(job.pages_dir)
@@ -948,23 +1022,23 @@ function Downloader:finalizeChapterArchive(job)
         if rename_error and tostring(rename_error) ~= "" then
             error_message = error_message .. " " .. tostring(rename_error)
         end
-        return {
+        return finish({
             ok = false,
             error = error_message,
             current = job.current,
             total = #job.pages,
             path = job.chapter_path,
-        }
+        })
     end
 
     removeDirectoryTree(job.pages_dir)
-    return {
+    return finish({
         ok = true,
         done = true,
         current = job.current,
         total = #job.pages,
         path = job.chapter_path,
-    }
+    })
 end
 
 function Downloader:downloadNextPage(job)
