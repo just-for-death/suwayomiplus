@@ -11,6 +11,27 @@ local FFIUtil = require("ffi/util")
 
 local SuwayomiPaths = {}
 
+local function truncateToBytesUTF8(s, max_bytes)
+    if #s <= max_bytes then return s end
+    -- Walk bytes, stopping at last valid UTF-8 boundary <= max_bytes
+    local byte_count = 0
+    local last_valid = 0
+    local i = 1
+    while i <= #s do
+        local b = string.byte(s, i)
+        local char_len
+        if b < 0x80 then char_len = 1
+        elseif b < 0xE0 then char_len = 2
+        elseif b < 0xF0 then char_len = 3
+        else char_len = 4 end
+        if byte_count + char_len > max_bytes then break end
+        byte_count = byte_count + char_len
+        last_valid = byte_count
+        i = i + char_len
+    end
+    return s:sub(1, last_valid)
+end
+
 local function normalizeDownloadDirectory(download_directory)
     if type(download_directory) ~= "string" or download_directory == "" then
         return nil
@@ -42,7 +63,7 @@ function SuwayomiPaths.sanitizePathSegment(name)
     if sanitized == "" or sanitized == "." or sanitized == ".." then
         return "untitled"
     end
-    return sanitized
+    return truncateToBytesUTF8(sanitized, 200)
 end
 
 function SuwayomiPaths.getSourceLabel(manga)

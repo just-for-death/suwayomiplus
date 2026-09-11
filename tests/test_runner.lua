@@ -95,10 +95,16 @@ end
 -- Test suites
 -- ---------------------------------------------------------------------------
 
-run_suite("Library Sort",            "test_library_sort.lua")
-run_suite("Wakeup Guard",            "test_wakeup_guard.lua")
-run_suite("Unread Count Display",    "test_unread_count_display.lua")
-run_suite("Continue Reading",        "test_continue_reading.lua")
+run_suite("Library Sort",               "test_library_sort.lua")
+run_suite("Wakeup Guard",               "test_wakeup_guard.lua")
+run_suite("Unread Count Display",       "test_unread_count_display.lua")
+run_suite("Continue Reading",           "test_continue_reading.lua")
+run_suite("Manga Metadata",             "test_manga_metadata.lua")
+run_suite("Sync Queue",                 "test_sync_queue.lua")
+run_suite("Wakeup Network Integration", "test_wakeup_network.lua")
+run_suite("Chapter Path",               "test_chapter_path.lua")
+run_suite("Continue Reading Network",   "test_continue_reading_network.lua")
+run_suite("Settings Defaults",          "test_settings_defaults.lua")
 
 -- ---------------------------------------------------------------------------
 -- Summary

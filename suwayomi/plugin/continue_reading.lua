@@ -65,7 +65,7 @@ function Methods:continueReading()
             end
 
             local target_manga
-            for _, entry in ipairs(result.entries or {}) do
+            for _, entry in ipairs(type(result.entries) == "table" and result.entries or {}) do
                 local manga = entry.manga
                 if manga then
                     local has_unread = manga.first_unread_chapter ~= nil

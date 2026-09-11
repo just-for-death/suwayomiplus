@@ -15,6 +15,22 @@ local SuwayomiPaths = require("suwayomi/paths")
 
 local Downloader = {}
 local DOWNLOAD_RETRY_DELAYS_SECONDS = { 0.5, 1 }
+
+-- Write KOReader sidecar metadata after a successful chapter download so
+-- the chapter appears with proper manga/series info in KOReader's library.
+-- Uses pcall throughout so a metadata failure never aborts the download.
+local function tryWriteChapterMetadata(final_path, manga, chapter)
+    if not final_path or final_path == "" or not manga or not chapter then
+        return
+    end
+    local ok, MangaMetadata = pcall(require, "suwayomi/downloads/manga_metadata")
+    if ok and MangaMetadata and MangaMetadata.writeChapterMetadata then
+        pcall(function()
+            MangaMetadata.writeChapterMetadata(final_path, manga, chapter)
+        end)
+    end
+end
+
 -- Large chapters routinely take minutes over a remote link; the per-request
 -- default is sized for single pages.
 local CHAPTER_ARCHIVE_TIMEOUT_SECONDS = 300
@@ -745,11 +761,17 @@ end
 function Downloader:downloadChapter(credentials, download_directory, manga, chapter)
     local direct_result = self:downloadDirectChapterArchive(credentials, download_directory, manga, chapter)
     if direct_result then
+        if direct_result.ok and direct_result.path then
+            tryWriteChapterMetadata(direct_result.path, manga, chapter)
+        end
         return direct_result
     end
 
     local start_result = self:startChapterDownload(credentials, download_directory, manga, chapter)
     if not start_result.ok or start_result.skipped then
+        if start_result.ok and start_result.path then
+            tryWriteChapterMetadata(start_result.path, manga, chapter)
+        end
         return start_result
     end
 
@@ -761,12 +783,19 @@ function Downloader:downloadChapter(credentials, download_directory, manga, chap
         end
     until result.done
 
-    return { ok = true, skipped = result and result.skipped, path = (result and result.path) or start_result.path }
+    local final_path = (result and result.path) or start_result.path
+    if final_path then
+        tryWriteChapterMetadata(final_path, manga, chapter)
+    end
+    return { ok = true, skipped = result and result.skipped, path = final_path }
 end
 
 function Downloader:downloadChapterWithProgress(credentials, download_directory, manga, chapter, progress_path)
     local direct_result = self:downloadDirectChapterArchive(credentials, download_directory, manga, chapter)
     if direct_result then
+        if direct_result.ok and direct_result.path then
+            tryWriteChapterMetadata(direct_result.path, manga, chapter)
+        end
         self:writeProgress(
             progress_path,
             direct_result.skipped and "skipped" or (direct_result.ok and "downloaded" or "failed"),
@@ -780,6 +809,9 @@ function Downloader:downloadChapterWithProgress(credentials, download_directory,
 
     local start_result = self:startChapterDownload(credentials, download_directory, manga, chapter)
     if not start_result.ok or start_result.skipped then
+        if start_result.ok and start_result.path then
+            tryWriteChapterMetadata(start_result.path, manga, chapter)
+        end
         self:writeProgress(
             progress_path,
             start_result.skipped and "skipped" or (start_result.ok and "downloaded" or "failed"),
@@ -807,7 +839,11 @@ function Downloader:downloadChapterWithProgress(credentials, download_directory,
         )
     until result.done
 
-    return { ok = true, skipped = result and result.skipped, path = (result and result.path) or start_result.path }
+    local final_path = (result and result.path) or start_result.path
+    if final_path then
+        tryWriteChapterMetadata(final_path, manga, chapter)
+    end
+    return { ok = true, skipped = result and result.skipped, path = final_path }
 end
 
 return Downloader
