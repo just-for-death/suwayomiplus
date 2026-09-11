@@ -115,6 +115,9 @@ end
 function RequestWorker:run(credentials, request, result_path)
     request = request or {}
     local ok, result = pcall(function()
+        if request.action == "fetch_manga_by_id" then
+            return SuwayomiAPI.fetchMangaById(credentials, request.manga_id)
+        end
         if request.action == "fetch_chapters_for_manga" then
             return SuwayomiAPI.fetchChaptersForManga(credentials, request.manga_id)
         end

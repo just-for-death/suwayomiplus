@@ -25,9 +25,13 @@ end
 
 local Methods = {}
 
-local function getSimpleUIMangaModule()
-    if not package.path:find("simpleui.koplugin", 1, true) then
-        package.path = package.path .. ";./plugins/simpleui.koplugin/?.lua"
+local function getMaxOutUIMangaModule()
+    -- MaxOutUI (fork of SimpleUI) owns the homescreen pin module.
+    for _, plug in ipairs({ "maxoutui.koplugin", "simpleui.koplugin" }) do
+        local marker = "plugins/" .. plug
+        if not package.path:find(marker, 1, true) then
+            package.path = package.path .. ";./" .. marker .. "/?.lua"
+        end
     end
     local ok, Manga = pcall(require, "desktop_modules/module_manga")
     if ok and Manga then return Manga end
@@ -261,6 +265,10 @@ function Methods:handleChapterContextResult(manga, result, on_ready)
     end
     local chapters = self:mergeChaptersWithReadLedger(manga, result.chapters)
     local context = self:setCurrentMangaChapterContext(manga, chapters)
+    -- Two-way: after pulling server isRead, push any local pending marks.
+    if self.schedulePendingReadSync then
+        self:schedulePendingReadSync(nil, 0)
+    end
     if on_ready then
         on_ready(context)
     end
@@ -282,17 +290,20 @@ end
 
 function Methods:withMangaChapterContext(manga, on_ready, options)
     options = options or {}
-    local context
-    if options.defer_empty_context_warning then
-        context = getLoadedMangaChapterContext(self, manga)
-    else
-        context = self:ensureMangaChapterContext(manga)
-    end
-    if context then
-        if on_ready then
-            on_ready(context)
+    -- sync_from_server: always re-fetch so chapters read on phone/web apply here.
+    if not options.sync_from_server then
+        local context
+        if options.defer_empty_context_warning then
+            context = getLoadedMangaChapterContext(self, manga)
+        else
+            context = self:ensureMangaChapterContext(manga)
         end
-        return true
+        if context then
+            if on_ready then
+                on_ready(context)
+            end
+            return true
+        end
     end
     if not manga or not manga.id then
         self:showMessage(I18n.t("This manga has no chapters loaded."))
@@ -340,7 +351,9 @@ function Methods:resumeMangaStream(manga)
             target_chapter = chapters[#chapters] or chapters[1]
         end
         self:streamChapter(manga, target_chapter, { chapters = chapters })
-    end)
+    end, {
+        sync_from_server = true,
+    })
 end
 
 function Methods:showChapterResultForManga(manga, result, options)
@@ -366,6 +379,10 @@ function Methods:showChapterResultForManga(manga, result, options)
 
     local chapters = self:mergeChaptersWithReadLedger(manga, result.chapters)
     self:setCurrentMangaChapterContext(manga, chapters)
+    -- Two-way: pull applied above; push Kindle-side pending read marks now.
+    if self.schedulePendingReadSync then
+        self:schedulePendingReadSync(nil, 0)
+    end
 
     local previous_chapter_menu = self.current_chapter_menu
     if previous_chapter_menu and self.isSuwayomiScreenActive and self:isSuwayomiScreenActive(previous_chapter_menu) and self.closeMenu then
@@ -439,7 +456,7 @@ function Methods:getMangaInformationActions(manga)
     end
     table.insert(actions, { id = "download", text = I18n.t("Download") })
     if manga and manga.id then
-        local Manga = getSimpleUIMangaModule()
+        local Manga = getMaxOutUIMangaModule()
         if Manga then
             local key = "suwayomi://manga/" .. tostring(manga.id)
             if Manga.isPinnedManga(key) then
@@ -454,10 +471,57 @@ function Methods:getMangaInformationActions(manga)
 end
 
 
+function Methods:isMangaDetailStub(manga)
+    if type(manga) ~= "table" or manga.id == nil then
+        return true
+    end
+    -- Library / search rows carry description or chapter stats.
+    -- Pinned stubs may include title/source/thumbnail only — still enrich.
+    if manga.description
+        or manga.author
+        or manga.authors
+        or manga.artist
+        or manga.artists
+        or manga.status
+        or manga.genres
+        or manga.genre
+        or manga.chapter_count
+        or manga.unread_count
+    then
+        return false
+    end
+    return true
+end
+
 function Methods:showMangaActions(manga, options)
     options = options or {}
     local action_options = copyOptions(options)
     action_options.refresh_action_menu_after_library_update = true
+
+    -- Pinned / deep-link stubs lack description and metadata. Fetch full manga
+    -- first so manga-information matches the library Browse experience.
+    if not options.skip_manga_enrich and self:isMangaDetailStub(manga) then
+        return self:startMangaNetworkRequest(
+            manga,
+            {
+                action = "fetch_manga_by_id",
+                manga_id = manga.id,
+            },
+            I18n.t("Loading manga…"),
+            function(result)
+                if result and result.ok and type(result.manga) == "table" then
+                    self:applyMangaRefreshResult(manga, result.manga)
+                elseif result and result.error then
+                    self:showMessage(result.error)
+                end
+                local enriched_options = copyOptions(options)
+                enriched_options.skip_manga_enrich = true
+                return self:showMangaActions(manga, enriched_options)
+            end,
+            I18n.t("Could not load manga details."),
+            "fetch_manga_by_id:" .. tostring(manga.id)
+        )
+    end
 
     if SuwayomiUI.showMangaInformation then
         return self:performMangaAction(manga, "manga_information", action_options)
@@ -475,10 +539,10 @@ function Methods:showMangaActions(manga, options)
             self:performMangaAction(manga, action.id, action_options)
         end
     end)
-    if self.trackSuwayomiScreen then
+    if menu and self.trackSuwayomiScreen then
         self:trackSuwayomiScreen("manga-actions", menu)
     end
-    return menu
+    return true
 end
 
 
@@ -529,6 +593,9 @@ function Methods:setMangaLibraryState(manga, in_library, options)
         end
         if options.refresh_action_menu_after_library_update then
             self:showMangaActions(manga, options)
+        end
+        if in_library == true and self.maybeAutoDownloadAfterLibraryAdd then
+            self:maybeAutoDownloadAfterLibraryAdd(manga)
         end
     end, I18n.t("Could not update library."), "library_state:" .. tostring(manga.id))
     if not result then
@@ -603,8 +670,7 @@ function Methods:performMangaAction(manga, action_id, options)
         return false
     end
     if action_id == "open_first_unread" then
-        -- The action is offered from cached hints, so the filtered chapter list
-        -- can still turn out to have nothing unread left.
+        -- Always re-sync read state so "next unread" matches Suwayomi (phone/web).
         local function openFirstUnread()
             local chapter = self:getFirstUnreadChapterForManga(manga)
             if chapter then
@@ -614,11 +680,9 @@ function Methods:performMangaAction(manga, action_id, options)
             return false
         end
 
-        if getLoadedMangaChapterContext(self, manga) then
-            return openFirstUnread()
-        end
         return self:withMangaChapterContext(manga, openFirstUnread, {
             defer_empty_context_warning = true,
+            sync_from_server = true,
         })
     end
     if action_id == "refresh_chapters" then
@@ -631,7 +695,7 @@ function Methods:performMangaAction(manga, action_id, options)
         return self:confirmRemoveMangaFromLibrary(manga, options)
     end
     if action_id == "pin_manga" then
-        local Manga = getSimpleUIMangaModule()
+        local Manga = getMaxOutUIMangaModule()
         local key = "suwayomi://manga/" .. tostring(manga.id)
         local cover_path
         pcall(function()
@@ -640,11 +704,12 @@ function Methods:performMangaAction(manga, action_id, options)
             local lfs = require("libs/libkoreader-lfs")
             local url = manga.thumbnailUrl or manga.thumbnail_url
             local variants = {
+                -- Match MaxOutUI homescreen thumbnail cache keys first.
+                { variant = "thumbnail" },
+                { variant = "thumbnail", width = 64, height = 96 },
                 { variant = "manga_cover", width = 64, height = 96 },
                 { variant = "poster", width = 240, height = 360 },
-                { variant = "thumbnail", width = 64, height = 96 },
                 { variant = "poster", width = 160, height = 240 },
-                { variant = "poster", width = 320, height = 480 },
                 {},
             }
             for _, opts in ipairs(variants) do
@@ -655,8 +720,9 @@ function Methods:performMangaAction(manga, action_id, options)
                 end
             end
         end)
+        local pinned_ok = false
         if Manga and Manga.addPinnedManga then
-            Manga.addPinnedManga(key, manga.title or tostring(manga.id), cover_path)
+            pinned_ok = Manga.addPinnedManga(key, manga.title or tostring(manga.id), cover_path) and true or false
         end
         local ok_sw, SuwayomiSettings = pcall(require, "suwayomi/settings")
         if ok_sw and SuwayomiSettings and SuwayomiSettings.savePinnedManga then
@@ -672,11 +738,15 @@ function Methods:performMangaAction(manga, action_id, options)
                 end
             end)
         end
-        self:showMessage(I18n.t("Pinned to SimpleUI Pinned Manga"))
+        if pinned_ok then
+            self:showMessage(I18n.t("Pinned to MaxOutUI"))
+        else
+            self:showMessage(I18n.t("Could not pin manga in MaxOutUI. Is MaxOutUI enabled?"))
+        end
         return true
     end
     if action_id == "unpin_manga" then
-        local Manga = getSimpleUIMangaModule()
+        local Manga = getMaxOutUIMangaModule()
         local key = "suwayomi://manga/" .. tostring(manga.id)
         if Manga and Manga.removePinnedManga then
             Manga.removePinnedManga(key)
@@ -694,8 +764,48 @@ function Methods:performMangaAction(manga, action_id, options)
                 SuwayomiSettings:savePinnedManga(updated)
             end)
         end
-        self:showMessage(I18n.t("Unpinned from SimpleUI Pinned Manga"))
+        self:showMessage(I18n.t("Unpinned from MaxOutUI"))
         return true
+    end
+    if action_id == "add_auto_download_missing" then
+        return self:addMangaToAutoDownload(manga, "missing")
+    end
+    if action_id == "add_auto_download_latest" then
+        return self:addMangaToAutoDownload(manga, "latest")
+    end
+    if action_id == "remove_auto_download" then
+        return self:removeMangaFromAutoDownload(manga)
+    end
+    if action_id == "auto_download_manage" then
+        if not SuwayomiUI.showMangaActionsMenu then
+            return false
+        end
+        local menu = SuwayomiUI.showMangaActionsMenu({
+            title = I18n.t("Auto-download"),
+            actions = MangaActionMenu.buildAutoDownloadActions(),
+            on_back = function()
+                self:showMangaActions(manga, options)
+            end,
+        }, function(action)
+            if action then
+                self:performMangaAction(manga, action.id, options)
+            end
+        end)
+        if self.trackSuwayomiScreen then
+            self:trackSuwayomiScreen("manga-actions", menu)
+        end
+        return true
+    end
+    if action_id == "auto_download_mode_missing" then
+        return self:setAutoDownloadMangaMode(manga, "missing")
+    end
+    if action_id == "auto_download_mode_latest" then
+        return self:setAutoDownloadMangaMode(manga, "latest")
+    end
+    if action_id == "auto_download_now" then
+        local entry = SuwayomiSettings:getAutoDownloadMangaEntry(manga)
+        local mode = entry and entry.mode or "missing"
+        return self:enqueueAutoDownloadForManga(manga, mode)
     end
     if action_id == "download" or action_id == "more" or action_id == "bulk_downloads" then
         self:showBulkDownloadMangaActions(manga, options)

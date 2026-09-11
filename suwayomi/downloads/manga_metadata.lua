@@ -38,10 +38,29 @@ local function serializeValue(v)
         return string.format("%q", v)
     elseif type(v) == "number" then
         return tostring(v)
+    elseif type(v) == "boolean" then
+        return v and "true" or "false"
     elseif v == nil then
         return "nil"
+    elseif type(v) == "table" then
+        local parts = { "{" }
+        for k, child in pairs(v) do
+            local key
+            if type(k) == "string" then
+                key = string.format("[%q]", k)
+            elseif type(k) == "number" then
+                key = string.format("[%s]", tostring(k))
+            else
+                key = nil
+            end
+            if key then
+                parts[#parts + 1] = key .. "=" .. serializeValue(child) .. ","
+            end
+        end
+        parts[#parts + 1] = "}"
+        return table.concat(parts)
     else
-        return tostring(v)
+        return "nil"
     end
 end
 
@@ -83,14 +102,8 @@ local function saveLuaTable(path, data)
     if ok_dump and dump then
         handle:write(dump(data, nil, true))
     else
-        -- Minimal fallback when dump.lua is unavailable (should not happen on KOReader).
-        handle:write("{\n")
-        for k, v in pairs(data) do
-            if type(k) == "string" and (type(v) == "string" or type(v) == "number" or type(v) == "boolean") then
-                handle:write(string.format("    [%q] = %s,\n", k, serializeValue(v)))
-            end
-        end
-        handle:write("}\n")
+        -- Nested-table fallback when dump.lua is unavailable (unit tests / odd hosts).
+        handle:write(serializeValue(data))
     end
     handle:write("\n")
     handle:close()
@@ -233,12 +246,16 @@ local function migrateLegacyCbzSidecar(doc_path)
         saveLuaTable(preferred_meta, preferred_data)
     end
     -- Best-effort remove legacy sidecar tree.
-    for name in lfs.dir(legacy) do
-        if name ~= "." and name ~= ".." then
-            os.remove(legacy .. "/" .. name)
+    if type(lfs.dir) == "function" then
+        for name in lfs.dir(legacy) do
+            if name ~= "." and name ~= ".." then
+                os.remove(legacy .. "/" .. name)
+            end
         end
     end
-    lfs.rmdir(legacy)
+    if type(lfs.rmdir) == "function" then
+        lfs.rmdir(legacy)
+    end
 end
 
 -- ---------------------------------------------------------------------------
@@ -290,7 +307,11 @@ function MangaMetadata.writeChapterMetadata(path, manga, chapter)
     existing.doc_props = doc_props
     existing.suwayomi_chapter_id = tostring(chapter.id or existing.suwayomi_chapter_id or "")
     existing.suwayomi_manga_id = tostring(manga.id or existing.suwayomi_manga_id or "")
-    if existing.doc_path == nil or existing.doc_path == "" then
+    local ok_paths, SuwayomiPaths = pcall(require, "suwayomi/paths")
+    if ok_paths and SuwayomiPaths and SuwayomiPaths.canonicalizePath then
+        path = SuwayomiPaths.canonicalizePath(path) or path
+    end
+    if existing.doc_path == nil or existing.doc_path == "" or existing.doc_path ~= path then
         existing.doc_path = path
     end
 
@@ -321,6 +342,10 @@ function MangaMetadata.writeMangaIndex(manga_dir, manga, chapters)
     end)
 
     local index_path = manga_dir .. "/.manga_index.lua"
+    local ok_paths, SuwayomiPaths = pcall(require, "suwayomi/paths")
+    if ok_paths and SuwayomiPaths and SuwayomiPaths.canonicalizePath then
+        manga_dir = SuwayomiPaths.canonicalizePath(manga_dir) or manga_dir
+    end
     local lines = {
         "return {",
         string.format('  title = %q,', tostring(manga.title or "")),
@@ -329,13 +354,22 @@ function MangaMetadata.writeMangaIndex(manga_dir, manga, chapters)
     }
     for _, entry in ipairs(chapters) do
         local ch = type(entry) == "table" and type(entry.chapter) == "table" and entry.chapter or {}
+        local entry_path = tostring(entry.path or "")
+        if ok_paths and SuwayomiPaths and SuwayomiPaths.canonicalizePath and entry_path ~= "" then
+            entry_path = SuwayomiPaths.canonicalizePath(entry_path) or entry_path
+        end
+        -- Prefer paths under the canonical manga_dir when the basename matches.
+        local base = entry_path:match("([^/]+)$")
+        if base and base ~= "" then
+            entry_path = manga_dir .. "/" .. base
+        end
         lines[#lines + 1] = string.format(
             '    { id = %q, name = %q, number = %s, source_order = %s, path = %q },',
             tostring(ch.id or ""),
             tostring(ch.name or ""),
             tostring(ch.chapter_number or 0),
             tostring(ch.source_order or ch.chapter_number or 0),
-            tostring(entry.path or "")
+            entry_path
         )
     end
     lines[#lines + 1] = "  },"
@@ -534,6 +568,20 @@ local function writeBytes(path, data)
 end
 
 local function decodeImageToBlitbuffer(data, kind)
+    -- Preferred path for WebP/PNG/JPEG on KOReader: RenderImage (uses libwebp).
+    -- Pic.openWebPDocumentFromData is often missing or fails in download subprocesses.
+    do
+        local ok_ri, RenderImage = pcall(require, "ui/renderimage")
+        if ok_ri and RenderImage and RenderImage.renderImageData then
+            local ok_bb, bitmap = pcall(function()
+                return RenderImage:renderImageData(data, #data, false)
+            end)
+            if ok_bb and bitmap then
+                return bitmap, nil
+            end
+        end
+    end
+
     local ok_pic, Pic = pcall(require, "ffi/pic")
     if not ok_pic or not Pic then
         return nil
@@ -545,6 +593,25 @@ local function decodeImageToBlitbuffer(data, kind)
         end
         if kind == "webp" and Pic.openWebPDocumentFromData then
             return Pic.openWebPDocumentFromData(data, #data)
+        end
+        if kind == "webp" or kind == "png" or kind == "jpeg" then
+            -- File-based openDocument fallback (PicDocument provider).
+            local ext = (kind == "jpeg") and ".jpg" or ("." .. tostring(kind))
+            local tmp = os.tmpname() .. ext
+            if not writeBytes(tmp, data) then
+                return nil
+            end
+            local ok_open, doc = pcall(function()
+                if Pic.openDocument then
+                    return Pic.openDocument(tmp)
+                end
+                return nil
+            end)
+            os.remove(tmp)
+            if not ok_open then
+                return nil
+            end
+            return doc
         end
         if kind == "png" and Pic.openPNGDocument then
             local tmp = os.tmpname() .. ".png"
@@ -562,25 +629,38 @@ local function decodeImageToBlitbuffer(data, kind)
         end
         return nil
     end)
-    if not ok_doc or not doc_or_err or not doc_or_err.image_bb then
+    if not ok_doc or not doc_or_err then
         return nil
     end
-    return doc_or_err.image_bb, doc_or_err
+    if doc_or_err.image_bb then
+        return doc_or_err.image_bb, doc_or_err
+    end
+    -- Some Pic documents expose the bitmap via openPage(1).
+    if doc_or_err.openPage then
+        local ok_page, page = pcall(function()
+            return doc_or_err:openPage(1)
+        end)
+        if ok_page and page and page.image_bb then
+            return page.image_bb, doc_or_err
+        end
+    end
+    return nil
 end
 
--- Convert downloaded thumbnail bytes into real JPEG bytes for folder covers.
--- Suwayomi often serves WebP; the UI thumbnail cache uses SWTHUMB1 (not an image).
-local function toJpegBytes(data, content_type)
-    local kind = sniffImageKind(data, content_type)
-    if not kind or kind == "swthumb" then
+local function blitbufferToJpegBytes(bb, doc)
+    if not bb then
         return nil
     end
-    if kind == "jpeg" then
-        return data
+    local writeJPG = bb.writeJPG
+    if not writeJPG and bb.copy then
+        -- Some RenderImage bitmaps need a copied BB for writeJPG.
+        local ok_copy, copied = pcall(function() return bb:copy() end)
+        if ok_copy and copied and copied.writeJPG then
+            bb = copied
+            writeJPG = copied.writeJPG
+        end
     end
-
-    local bb, doc = decodeImageToBlitbuffer(data, kind)
-    if not bb or not bb.writeJPG then
+    if not writeJPG then
         return nil
     end
 
@@ -590,7 +670,9 @@ local function toJpegBytes(data, content_type)
     end)
     if doc and doc.close then
         pcall(function() doc:close() end)
-    elseif bb.free then
+    end
+    -- Free RenderImage bitmap when we own it.
+    if bb.free then
         pcall(function() bb:free() end)
     end
     if not ok_write then
@@ -612,11 +694,146 @@ local function toJpegBytes(data, content_type)
     return jpeg
 end
 
+-- Convert downloaded thumbnail bytes into real JPEG bytes for folder covers.
+-- Suwayomi often serves WebP; the UI thumbnail cache uses SWTHUMB1 (not an image).
+local function toJpegBytes(data, content_type)
+    local kind = sniffImageKind(data, content_type)
+    if not kind or kind == "swthumb" then
+        return nil
+    end
+    if kind == "jpeg" then
+        return data
+    end
+
+    local bb, doc = decodeImageToBlitbuffer(data, kind)
+    return blitbufferToJpegBytes(bb, doc)
+end
+
+-- Prefer raw JPEG page bytes (no decoder). CBZ pages are usually already JPEG.
+local function bytesToCoverJpeg(bytes)
+    if type(bytes) ~= "string" or #bytes < 4 then
+        return nil
+    end
+    if isValidJpegBytes(bytes) then
+        return bytes
+    end
+    return toJpegBytes(bytes, nil)
+end
+
+local function listCbzImageEntriesViaUnzip(cbz_path)
+    -- Kindle BusyBox unzip has no -Z1; parse `unzip -l` instead.
+    local quoted = cbz_path:gsub('"', '\\"')
+    local listing = io.popen('unzip -l "' .. quoted .. '" 2>/dev/null')
+    if not listing then
+        return {}
+    end
+    local entries = {}
+    for line in listing:lines() do
+        -- Typical: "   319089  00-00-1980 00:00   0001.jpg"
+        local name = line:match("%d%d:%d%d%s+(.+)$")
+        if type(name) == "string" then
+            name = name:gsub("^%s+", ""):gsub("%s+$", "")
+            if name:match("%.[Jj][Pp][Ee]?[Gg]$")
+                or name:match("%.[Pp][Nn][Gg]$")
+                or name:match("%.[Ww][Ee][Bb][Pp]$") then
+                entries[#entries + 1] = name
+            end
+        end
+    end
+    listing:close()
+    table.sort(entries)
+    return entries
+end
+
+-- Last-resort cover: first image page inside the first chapter CBZ.
+-- Used when the Suwayomi thumbnail is WebP and on-device WebP decode fails
+-- (common in download subprocesses). Chapter pages are usually already JPEG.
+local function jpegFromFirstChapterPage(manga_dir)
+    local ok_lfs, lfs = pcall(require, "suwayomi/fs")
+    if not ok_lfs or not lfs then
+        return nil
+    end
+    local candidates = {}
+    for file in lfs.dir(manga_dir) do
+        if type(file) == "string" and file:match("%.cbz$") and not file:match("%.part") then
+            candidates[#candidates + 1] = file
+        end
+    end
+    table.sort(candidates)
+    if #candidates == 0 then
+        return nil
+    end
+
+    local ok_arc, Archiver = pcall(require, "ffi/archiver")
+    local cbz_path = manga_dir .. "/" .. candidates[1]
+    if ok_arc and Archiver and Archiver.Reader then
+        local ok_open, reader = pcall(function()
+            return Archiver.Reader:new(cbz_path)
+        end)
+        if ok_open and reader then
+            local names = {}
+            pcall(function()
+                for name in reader:iterate() do
+                    if type(name) == "string" and name:match("%.[Jj][Pp][Ee]?[Gg]$") then
+                        names[#names + 1] = name
+                    elseif type(name) == "string" and name:match("%.[Pp][Nn][Gg]$") then
+                        names[#names + 1] = name
+                    elseif type(name) == "string" and name:match("%.[Ww][Ee][Bb][Pp]$") then
+                        names[#names + 1] = name
+                    end
+                end
+            end)
+            table.sort(names)
+            for _, name in ipairs(names) do
+                local ok_ext, bytes = pcall(function()
+                    return reader:extractToMemory(name)
+                end)
+                if ok_ext and type(bytes) == "string" and #bytes > 0 then
+                    local jpeg = bytesToCoverJpeg(bytes)
+                    if jpeg then
+                        pcall(function() reader:close() end)
+                        return jpeg
+                    end
+                end
+            end
+            pcall(function() reader:close() end)
+        end
+    end
+
+    -- Fallback: BusyBox-compatible unzip -l / unzip -p.
+    local entries = listCbzImageEntriesViaUnzip(cbz_path)
+    local quoted_cbz = cbz_path:gsub('"', '\\"')
+    for _, entry in ipairs(entries) do
+        local pipe = io.popen('unzip -p "' .. quoted_cbz .. '" "' .. entry:gsub('"', '\\"') .. '" 2>/dev/null')
+        if pipe then
+            local bytes = pipe:read("*a")
+            pipe:close()
+            local jpeg = bytesToCoverJpeg(bytes)
+            if jpeg then
+                return jpeg
+            end
+        end
+    end
+    return nil
+end
+
 function MangaMetadata.writeCoverFiles(manga_dir, body, content_type)
-    if not manga_dir or manga_dir == "" or not body or body == "" then
+    if not manga_dir or manga_dir == "" then
         return false
     end
-    local jpeg = toJpegBytes(body, content_type)
+    local jpeg = nil
+    local kind = (body and body ~= "") and sniffImageKind(body, content_type) or nil
+    -- Prefer a real server thumbnail whenever we can turn it into JPEG.
+    -- Parent-process ensureCoversAfterFinish has RenderImage; only fall back
+    -- to the first chapter page when decode fails (common in bare subprocesses).
+    if kind == "jpeg" then
+        jpeg = body
+    elseif body and body ~= "" then
+        jpeg = toJpegBytes(body, content_type)
+    end
+    if not jpeg then
+        jpeg = jpegFromFirstChapterPage(manga_dir)
+    end
     if not jpeg then
         return false
     end
@@ -651,6 +868,38 @@ function MangaMetadata.clearBookInfoCache(filepath)
     return deleted and true or false
 end
 
+-- Remove accidental DocSettings sidecars CoverBrowser creates for cover.jpg /
+-- folder.jpg (they show up as orphan *.sdr next to the manga folder).
+local function removeVisibleCoverSidecars(manga_dir)
+    local ok_lfs, lfs = pcall(require, "suwayomi/fs")
+    if not ok_lfs or not lfs then
+        return
+    end
+    for _, name in ipairs(VISIBLE_COVER_FILENAMES) do
+        local cover_path = manga_dir .. "/" .. name
+        local base = cover_path:match("^(.*)%.[^./]+$") or cover_path
+        local sdr = base .. ".sdr"
+        if lfs.attributes(sdr, "mode") == "directory" then
+            for fname in lfs.dir(sdr) do
+                if fname ~= "." and fname ~= ".." then
+                    os.remove(sdr .. "/" .. fname)
+                end
+            end
+            lfs.rmdir(sdr)
+        end
+        -- Legacy mistaken layout: cover.jpg.sdr
+        local legacy = cover_path .. ".sdr"
+        if lfs.attributes(legacy, "mode") == "directory" then
+            for fname in lfs.dir(legacy) do
+                if fname ~= "." and fname ~= ".." then
+                    os.remove(legacy .. "/" .. fname)
+                end
+            end
+            lfs.rmdir(legacy)
+        end
+    end
+end
+
 -- Mark cover.jpg / folder.jpg so CoverBrowser does not treat them as chapters.
 function MangaMetadata.ignoreVisibleCoverBookInfo(manga_dir)
     if not manga_dir or manga_dir == "" then
@@ -659,6 +908,7 @@ function MangaMetadata.ignoreVisibleCoverBookInfo(manga_dir)
     local ok_lfs, lfs = pcall(require, "suwayomi/fs")
     local ok_bim, BookInfoManager = pcall(require, "bookinfomanager")
     if not ok_bim or not BookInfoManager then
+        removeVisibleCoverSidecars(manga_dir)
         return false
     end
     local marked = false
@@ -683,6 +933,8 @@ function MangaMetadata.ignoreVisibleCoverBookInfo(manga_dir)
         end
     end
     MangaMetadata.clearBookInfoCache(manga_dir .. "/.cover.jpg")
+    -- Drop sidecar dirs CoverBrowser may have already created for the JPGs.
+    removeVisibleCoverSidecars(manga_dir)
     return marked
 end
 
@@ -713,21 +965,22 @@ function MangaMetadata.writeMangaCover(manga_dir, manga, credentials)
             thumb_url = "/api/v1/manga/" .. tostring(manga_id) .. "/thumbnail"
         end
     end
-    if not thumb_url or thumb_url == "" then
-        return false
+
+    local body, content_type
+    if thumb_url and thumb_url ~= "" then
+        local ok_api, SuwayomiAPI = pcall(require, "suwayomi/api")
+        if ok_api and SuwayomiAPI and SuwayomiAPI.downloadBinary then
+            local res = SuwayomiAPI.downloadBinary(credentials, thumb_url)
+            if res and res.ok and res.body and #res.body > 0 then
+                body = res.body
+                content_type = res.content_type
+            end
+        end
     end
 
-    local ok_api, SuwayomiAPI = pcall(require, "suwayomi/api")
-    if not ok_api or not SuwayomiAPI or not SuwayomiAPI.downloadBinary then
-        return false
-    end
-
-    local res = SuwayomiAPI.downloadBinary(credentials, thumb_url)
-    if not (res and res.ok and res.body and #res.body > 0) then
-        return false
-    end
-
-    return MangaMetadata.writeCoverFiles(manga_dir, res.body, res.content_type)
+    -- writeCoverFiles decodes WebP/PNG via RenderImage and falls back to the
+    -- first chapter page when the server thumbnail cannot be converted.
+    return MangaMetadata.writeCoverFiles(manga_dir, body, content_type)
 end
 
 return MangaMetadata

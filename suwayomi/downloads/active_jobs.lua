@@ -452,6 +452,43 @@ function ActiveJobs:recordProgress(active, progress)
     })
 end
 
+local function pruneMangaStaging(queue, archive_path)
+    if not archive_path or not queue or not queue.downloader then
+        return
+    end
+    local manga_dir = tostring(archive_path):match("^(.*)/[^/]+$")
+    if manga_dir and queue.downloader.pruneEmptyStagingDirectory then
+        pcall(function()
+            queue.downloader:pruneEmptyStagingDirectory(manga_dir)
+        end)
+    end
+end
+
+-- Parent-process safety net: cover HTTP scheduled inside a download subprocess
+-- is lost on os.exit. Ensure folder covers exist once the child reports done.
+local function ensureCoversAfterFinish(queue, active, archive_path)
+    if not queue or not active or not archive_path then
+        return
+    end
+    local manga_dir = tostring(archive_path):match("^(.*)/[^/]+$")
+    if not manga_dir or not active.manga then
+        return
+    end
+    local credentials = active.credentials or (queue.getCredentialsForJob and queue:getCredentialsForJob())
+    local function write_cover()
+        pcall(function()
+            if queue.downloader and queue.downloader.ensureMangaCover then
+                queue.downloader:ensureMangaCover(credentials, manga_dir, active.manga)
+            end
+        end)
+    end
+    if queue.ui_manager and queue.ui_manager.scheduleIn then
+        queue.ui_manager:scheduleIn(0.3, write_cover)
+    else
+        write_cover()
+    end
+end
+
 function ActiveJobs:finishFromProgress(active, progress)
     local queue = self.queue
     self:removeJob(active)
@@ -486,6 +523,8 @@ function ActiveJobs:finishFromProgress(active, progress)
             active.chapter,
             archive_path
         )
+        pruneMangaStaging(queue, archive_path)
+        ensureCoversAfterFinish(queue, active, archive_path)
         queue:setStatus(active.manga, active.chapter, {
             state = (progress.state == "skipped") and "skipped" or "downloaded",
             current = progress.current,
@@ -503,6 +542,8 @@ function ActiveJobs:finishFromProgress(active, progress)
             total = progress.total,
         })
         queue:notifyChapterArchiveReady(active.manga, active.chapter, archive_path)
+        pruneMangaStaging(queue, archive_path)
+        ensureCoversAfterFinish(queue, active, archive_path)
     elseif progress and progress.state == "failed" then
         local message = queue:formatFailureMessage(
             active.manga,

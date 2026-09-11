@@ -42,23 +42,20 @@ end
 
 -- Write real JPEG folder covers (cover.jpg / folder.jpg / .cover.jpg).
 -- Rewrites broken WebP-as-.jpg or SWTHUMB1 cache copies when needed.
--- Cover HTTP is deferred off the download hot path so the UI stays responsive.
+--
+-- MUST run synchronously here. Downloads usually finish inside a subprocess that
+-- calls os.exit() right after writeSidecarsForChapter; a UIManager:scheduleIn
+-- callback never runs in that child, which left manga folders (e.g. Tower
+-- Dungeon) with no covers. writeMangaCover short-circuits once valid JPEGs
+-- exist, so only the first chapter of a series pays the thumbnail GET.
 local function tryWriteMangaCover(manga_dir, manga, credentials)
     if not manga_dir or not manga then return end
-    local function write_cover()
-        pcall(function()
-            local ok_mm, MM = pcall(require, "suwayomi/downloads/manga_metadata")
-            if ok_mm and MM and MM.writeMangaCover then
-                MM.writeMangaCover(manga_dir, manga, credentials)
-            end
-        end)
-    end
-    local ok_ui, UIManager = pcall(require, "ui/uimanager")
-    if ok_ui and UIManager and UIManager.scheduleIn then
-        UIManager:scheduleIn(0.2, write_cover)
-    else
-        write_cover()
-    end
+    pcall(function()
+        local ok_mm, MM = pcall(require, "suwayomi/downloads/manga_metadata")
+        if ok_mm and MM and MM.writeMangaCover then
+            MM.writeMangaCover(manga_dir, manga, credentials)
+        end
+    end)
 end
 
 -- Drop CoverBrowser bookinfo rows so a prior crash/"unsupported" mark cannot
@@ -76,10 +73,11 @@ local function tryClearBookInfo(filepath)
 end
 
 -- Public so active_jobs (subprocess + inline finish) can write sidecars once.
+-- Covers are intentionally NOT written here: the download child often cannot
+-- decode Suwayomi WebP thumbs, and a chapter-page fallback would short-circuit
+-- the parent ensureCoversAfterFinish pass (which has RenderImage).
 function Downloader:writeSidecarsForChapter(final_path, manga, chapter, credentials)
     tryWriteChapterMetadata(final_path, manga, chapter)
-    local manga_dir = final_path and tostring(final_path):match("^(.*)/[^/]+$")
-    tryWriteMangaCover(manga_dir, manga, credentials)
     -- Allow CoverBrowser to extract a fresh thumb for this finished CBZ.
     tryClearBookInfo(final_path)
 end

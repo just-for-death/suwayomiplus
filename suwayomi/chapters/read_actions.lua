@@ -175,8 +175,8 @@ function Methods:markChapterListRead(manga, chapters)
         })
     end
 
-    self:saveChapterLedger(ledger)
     self:refreshChapterMenu({ ledger = ledger })
+    self:saveChapterLedger(ledger)
     self:schedulePendingReadSync()
     if self.applyMangaKeepNextUnreadDownloadsPolicy then
         self:applyMangaKeepNextUnreadDownloadsPolicy(manga)

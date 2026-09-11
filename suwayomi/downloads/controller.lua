@@ -273,6 +273,14 @@ end
 
 
 function Methods:showDownloads()
+    if self.reconcileDownloadedChapterLedger then
+        pcall(function()
+            local marked = self:reconcileDownloadedChapterLedger()
+            if marked and marked > 0 and self.schedulePendingReadSync then
+                self:schedulePendingReadSync(nil, 0)
+            end
+        end)
+    end
     local queue = self:getDownloadQueue()
     local snapshot = queue:getSnapshot()
     local options, trackMenu = self:withDownloadsMenuTracking(self:getDownloadsMenuOptions(snapshot))

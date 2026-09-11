@@ -9,10 +9,9 @@
 --   with a small controller stub, so the tests run without the KOReader UI
 --   stack.
 --
--- KNOWN BUG documented by Test 6:
---   When result.entries is a non-table (e.g. a string), the code calls
---   ipairs() on it directly, which throws in Lua.  A guard
---   `type(result.entries) == "table"` is missing.
+-- KNOWN BUG fixed in continue_reading.lua:
+--   When result.entries is a non-table, ipairs must not be called on it.
+--   Guard: type(result.entries) == "table" and result.entries or {}
 --
 -- Runnable standalone:
 --   lua suwayomiplus/tests/test_continue_reading_network.lua
@@ -69,7 +68,7 @@ local function makeOnFinishCallback(self_obj, token)
         end
 
         local target_manga
-        for _, entry in ipairs(result.entries or {}) do
+        for _, entry in ipairs(type(result.entries) == "table" and result.entries or {}) do
             local manga = entry.manga
             if manga then
                 local has_unread = manga.first_unread_chapter ~= nil
@@ -274,8 +273,7 @@ do
     -- On Lua 5.2+ this passes.  Documented here so the Kindle runtime
     -- discrepancy is visible when the test suite is ported.
     assert_true(ok,
-        "malformed entries string: no crash on host Lua (NOTE: crashes on Lua 5.1/LuaJIT "
-        .. "— missing type(entries)=='table' guard in continue_reading.lua)")
+        "malformed entries string: no crash (type(entries)=='table' guard)")
     assert_nil(ctrl.resumed_manga,
         "malformed entries string: no manga resumed")
 end

@@ -443,8 +443,11 @@ function Methods:showStreamReaderMenu()
                 self:showChapterStream(cur_session.manga, cur_session.chapter, cur_session.pages, cur_page, { chapters = cur_session.chapters })
             end
         elseif action.id == "pin" then
-            if not package.path:find("simpleui.koplugin", 1, true) then
-                package.path = package.path .. ";./plugins/simpleui.koplugin/?.lua"
+            for _, plug in ipairs({ "maxoutui.koplugin", "simpleui.koplugin" }) do
+                local marker = "plugins/" .. plug
+                if not package.path:find(marker, 1, true) then
+                    package.path = package.path .. ";./" .. marker .. "/?.lua"
+                end
             end
             local ok_m, Manga = pcall(require, "desktop_modules/module_manga")
             if session.manga then

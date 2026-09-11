@@ -73,24 +73,55 @@ function Methods:startPendingReadSyncWorker(credentials, max_count)
         return false, #batch
     end
 
-    local active = {
-        credentials = credentials,
-        batch = batch,
-    }
+    local active
+    active = SubprocessJob.start({
+        active = {
+            request = { action = "read_sync" },
+            result_path = self:getReadSyncResultPath(),
+            batch = batch,
+            credentials = credentials,
+        },
+        ffi_util = FFIUtil,
+        ui_manager = UIManager,
+        poll_interval_seconds = self.read_sync_poll_interval_seconds or 0.5,
+        timeout_seconds = self.read_sync_watchdog_timeout_seconds or 60,
+        run = function(path)
+            SuwayomiReadSyncWorker:run(credentials, batch, path)
+        end,
+        read_result = function(path)
+            return SuwayomiReadSyncWorker:readResult(path)
+        end,
+        on_finish = function(_, result)
+            if not self.pending_read_sync_active or self.pending_read_sync_active ~= active then
+                return
+            end
+            local synced, attempted = self:applyPendingReadSyncResult(active, result)
+            self:finishPendingReadSync(active, synced, attempted)
+        end,
+        on_timeout = function()
+            if self.pending_read_sync_active == active then
+                self.pending_read_sync_active = nil
+            end
+            self:schedulePendingReadSync(nil, self.read_sync_failure_delay_seconds or 5)
+        end,
+        on_error = function()
+            if self.pending_read_sync_active == active then
+                self.pending_read_sync_active = nil
+            end
+            self:schedulePendingReadSync(nil, self.read_sync_failure_delay_seconds or 5)
+        end,
+        on_cancel = function()
+            if self.pending_read_sync_active == active then
+                self.pending_read_sync_active = nil
+            end
+        end,
+    })
+
+    if not active then
+        return false, #batch
+    end
+
     self.pending_read_sync_active = active
-
-    UIManager:scheduleIn(0.01, function()
-        local ok, result = pcall(function()
-            return SuwayomiReadSyncWorker:run(credentials, batch, nil)
-        end)
-        if not ok or type(result) ~= "table" then
-            self.pending_read_sync_active = nil
-            return
-        end
-        local synced, attempted = self:applyPendingReadSyncResult(active, result)
-        self:finishPendingReadSync(active, synced, attempted)
-    end)
-
     return true, #batch
 end
 

@@ -117,7 +117,9 @@ function Methods:buildChapterMenuItems(manga, chapters, ledger)
                 end
                 if item._suwayomi_is_read ~= true then
                     item.pending_read_sync = true
+                    item.pending_read_state = true
                     chapter.pending_read_sync = true
+                    chapter.pending_read_state = true
                 end
             end
             if chapter_exists and item.is_read == true and not metadata_finished then
@@ -131,6 +133,7 @@ function Methods:buildChapterMenuItems(manga, chapters, ledger)
                 path = chapter_path,
                 read = item.is_read == true,
                 pending_read_sync = item.pending_read_sync == true or nil,
+                pending_read_state = item.pending_read_state,
             }
             if ledger then
                 self:upsertChapterLedgerEntryInLedger(ledger, manga, item, updates)
@@ -456,6 +459,16 @@ function Methods:refreshChapterMenu(options)
     if not self.current_chapter_context then
         return
     end
+    -- No visible chapter menu → skip rebuilding hundreds of rows (status
+    -- labels are still available via getDownloadQueue():getStatus).
+    if not self.current_chapter_menu then
+        self.pending_chapter_menu_refresh = false
+        return
+    end
+    if self.isSuwayomiScreenActive and not self:isSuwayomiScreenActive(self.current_chapter_menu) then
+        self.pending_chapter_menu_refresh = false
+        return
+    end
     self.pending_chapter_menu_refresh = false
 
     local menu_options_builder = options.quick
@@ -473,14 +486,25 @@ function Methods:refreshChapterMenu(options)
     self.current_chapter_options.title_bar_left_icon = menu_options.title_bar_left_icon
     self.current_chapter_options.on_title_bar_left_tap = menu_options.on_title_bar_left_tap
 
-    if SuwayomiUI.updateChapterMenu then
-        SuwayomiUI.updateChapterMenu(self.current_chapter_menu, menu_options, function(chapter)
-            self:handleChapterTap(self.current_chapter_context.manga, chapter)
-        end, function(chapter)
-            self:handleChapterHold(self.current_chapter_context.manga, chapter)
-        end)
-    elseif self.current_chapter_menu and self.current_chapter_menu.updateItems then
-        self.current_chapter_menu:updateItems(nil, true)
+    local ok_update, update_err = pcall(function()
+        if SuwayomiUI.updateChapterMenu then
+            SuwayomiUI.updateChapterMenu(self.current_chapter_menu, menu_options, function(chapter)
+                self:handleChapterTap(self.current_chapter_context.manga, chapter)
+            end, function(chapter)
+                self:handleChapterHold(self.current_chapter_context.manga, chapter)
+            end)
+        elseif self.current_chapter_menu and self.current_chapter_menu.updateItems then
+            self.current_chapter_menu:updateItems(nil, true)
+        end
+    end)
+    if not ok_update then
+        SuwayomiDebug.log({
+            operation = "refreshChapterMenu",
+            event = "update_error",
+            error = tostring(update_err),
+            chapter_count = #(self.current_chapter_context.chapters or {}),
+        })
+        return
     end
     SuwayomiDebug.log({
         operation = "refreshChapterMenu",

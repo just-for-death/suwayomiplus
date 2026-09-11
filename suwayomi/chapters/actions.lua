@@ -112,7 +112,9 @@ function Methods:confirmDeleteChapterFromDevice(manga, chapter)
 end
 
 
-function Methods:enqueueSelectedChapterDownloads(manga, chapters, download_directory)
+function Methods:enqueueSelectedChapterDownloads(manga, chapters, download_directory, options)
+    options = options or {}
+    local quiet = options.quiet == true
     local started_at = SuwayomiDebug.now()
     local queued = 0
     local skipped = 0
@@ -138,13 +140,15 @@ function Methods:enqueueSelectedChapterDownloads(manga, chapters, download_direc
     self:clearChapterSelection(true)
     self:refreshChapterMenu({ quick = true })
 
-    if capped > 0 then
-        self:showMessage(I18n.f(
-            "Queued first %1 downloads. Refine the chapter selection to queue more.",
-            self.max_batch_queue_chapters
-        ))
-    else
-        self:showMessage(self:formatBulkDownloadMessage(queued, skipped))
+    if not quiet then
+        if capped > 0 then
+            self:showMessage(I18n.f(
+                "Queued first %1 downloads. Refine the chapter selection to queue more.",
+                self.max_batch_queue_chapters
+            ))
+        else
+            self:showMessage(self:formatBulkDownloadMessage(queued, skipped))
+        end
     end
     SuwayomiDebug.log({
         operation = "enqueueSelectedChapterDownloads",
@@ -155,6 +159,7 @@ function Methods:enqueueSelectedChapterDownloads(manga, chapters, download_direc
         queued_count = queued,
         skipped_count = skipped,
         capped_count = capped,
+        quiet = quiet,
         elapsed_ms = SuwayomiDebug.elapsedMs(started_at),
     })
     return queued

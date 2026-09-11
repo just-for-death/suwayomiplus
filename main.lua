@@ -22,6 +22,7 @@ local SettingsController = require("suwayomi/plugin/settings_controller")
 local ReaderReturn = require("suwayomi/reader_return")
 local BrowseController = require("suwayomi/browse/controller")
 local DownloadsDirectory = require("suwayomi/downloads/directory")
+local AutoDownloadController = require("suwayomi/downloads/auto_download")
 local MangaController = require("suwayomi/manga/controller")
 local ChapterContext = require("suwayomi/chapters/context")
 local ChapterMenu = require("suwayomi/chapters/menu")
@@ -71,15 +72,30 @@ function SuwayomiPlugin:createDownloadQueue()
         getCredentials = function()
             return SuwayomiSettings:load()
         end,
-        onStatusChanged = function()
+        onStatusChanged = function(info)
+            info = type(info) == "table" and info or {}
             if self.chapter_menu_refresh_suppressed and self.chapter_menu_refresh_suppressed > 0 then
-                self.pending_chapter_menu_refresh = true
+                -- Keep a sticky pending flag so the suppressed block still
+                -- refreshes chapter labels once it finishes.
+                if not info.progress_only then
+                    self.pending_chapter_menu_refresh = true
+                end
+                self.pending_downloads_menu_refresh = true
                 return
             end
-            self:refreshChapterMenu({ quick = true })
-            if self.refreshDownloadsMenu then
-                self:refreshDownloadsMenu()
+
+            -- Page-progress ticks (downloading 3/40 → 4/40): never rebuild the
+            -- chapter list. That was freezing Berserk-sized menus (~400 rows)
+            -- and crashing IconButton with a nil dimen.
+            if info.progress_only then
+                self:_scheduleDownloadsMenuRefresh()
+                return
             end
+
+            self.pending_chapter_menu_refresh = true
+            self.pending_downloads_menu_refresh = true
+            self:_scheduleDownloadsMenuRefresh()
+            self:_scheduleChapterMenuRefresh()
         end,
         onMessage = function(message)
             self:showMessage(message)
@@ -98,6 +114,45 @@ function SuwayomiPlugin:createDownloadQueue()
             end
         end,
     }
+end
+
+function SuwayomiPlugin:_scheduleDownloadsMenuRefresh()
+    self.pending_downloads_menu_refresh = true
+    if self._downloads_menu_refresh_scheduled then
+        return
+    end
+    self._downloads_menu_refresh_scheduled = true
+    UIManager:scheduleIn(0.75, function()
+        self._downloads_menu_refresh_scheduled = nil
+        if not self.pending_downloads_menu_refresh then
+            return
+        end
+        self.pending_downloads_menu_refresh = nil
+        if self.refreshDownloadsMenu then
+            pcall(function()
+                self:refreshDownloadsMenu()
+            end)
+        end
+    end)
+end
+
+function SuwayomiPlugin:_scheduleChapterMenuRefresh()
+    self.pending_chapter_menu_refresh = true
+    if self._chapter_menu_refresh_scheduled then
+        return
+    end
+    self._chapter_menu_refresh_scheduled = true
+    -- Longer debounce than downloads: chapter rows are expensive to rebuild.
+    UIManager:scheduleIn(2.0, function()
+        self._chapter_menu_refresh_scheduled = nil
+        if not self.pending_chapter_menu_refresh then
+            return
+        end
+        self.pending_chapter_menu_refresh = nil
+        pcall(function()
+            self:refreshChapterMenu({ quick = true })
+        end)
+    end)
 end
 
 function SuwayomiPlugin:getDownloadQueue()
@@ -209,21 +264,30 @@ function SuwayomiPlugin:withChapterMenuRefreshSuppressed(callback)
     local ok, result = pcall(callback)
     self.chapter_menu_refresh_suppressed = (self.chapter_menu_refresh_suppressed or 1) - 1
     local should_refresh_chapters = false
+    local should_refresh_downloads = false
     if self.chapter_menu_refresh_suppressed <= 0 then
         self.chapter_menu_refresh_suppressed = nil
         should_refresh_chapters = ok and self.pending_chapter_menu_refresh == true
+        should_refresh_downloads = ok and self.pending_downloads_menu_refresh == true
         if should_refresh_chapters then
             self.pending_chapter_menu_refresh = nil
+        end
+        if should_refresh_downloads then
+            self.pending_downloads_menu_refresh = nil
         end
     end
     if not ok then
         error(result)
     end
     if should_refresh_chapters then
-        self:refreshChapterMenu({ quick = true })
-        if self.refreshDownloadsMenu then
+        pcall(function()
+            self:refreshChapterMenu({ quick = true })
+        end)
+    end
+    if should_refresh_downloads and self.refreshDownloadsMenu then
+        pcall(function()
             self:refreshDownloadsMenu()
-        end
+        end)
     end
     return result
 end
@@ -288,6 +352,19 @@ function SuwayomiPlugin:init()
                 end
             end)
         end)
+        -- Pull finished local CBZs into pending read-sync (KOReader complete → Suwayomi).
+        UIManager:scheduleIn(3, function()
+            pcall(function()
+                if self.reconcileDownloadedChapterLedger then
+                    local marked = self:reconcileDownloadedChapterLedger()
+                    if marked and marked > 0 and self.schedulePendingReadSync then
+                        self:schedulePendingReadSync(nil, 0)
+                    end
+                elseif self.schedulePendingReadSync then
+                    self:schedulePendingReadSync(nil, 1)
+                end
+            end)
+        end)
     end
     -- Register Suwayomi home-screen modules with SimpleUI if installed.
     UIManager:scheduleIn(1, function()
@@ -295,6 +372,7 @@ function SuwayomiPlugin:init()
             local ok, Registry = pcall(require, "desktop_modules/moduleregistry")
             if ok and Registry and Registry.register then
                 Registry.register("desktop_modules/module_suwayomi_library")
+                Registry.register("desktop_modules/module_suwayomi_auto_download")
                 SuwayomiDebug.log({ operation = "plugin_init", event = "simpleui_library_module_registered" })
             end
         end)
@@ -310,6 +388,7 @@ local CONTROLLER_MODULES = {
     ReaderReturn,
     BrowseController,
     DownloadsDirectory,
+    AutoDownloadController,
     MangaController,
     ChapterContext,
     ChapterMenu,

@@ -201,7 +201,7 @@ function DownloadQueue:clearFailed()
 
     if cleared > 0 then
         self:savePersistentJobs(remaining)
-        self.onStatusChanged()
+        self.onStatusChanged({ state_changed = true, reason = "clear_failed" })
     end
     return cleared
 end
@@ -222,16 +222,27 @@ local function isSameStatus(left, right)
         and left.total == right.total
 end
 
--- Progress is polled twice a second per job and each notification rebuilds the
--- chapter and downloads menus, so unchanged progress must stay silent.
+-- Progress is polled twice a second per job. Callers must not rebuild huge
+-- chapter menus on every page tick — onStatusChanged receives a reason table:
+--   { progress_only = true }  → downloads UI only
+--   { state_changed = true }  → chapter + downloads UI
 function DownloadQueue:setStatus(manga, chapter, status)
     local key = self:getKey(manga, chapter)
-    local unchanged = isSameStatus(self.statuses[key], status)
+    local previous = self.statuses[key]
+    local unchanged = isSameStatus(previous, status)
     self.statuses[key] = status
     if unchanged then
         return
     end
-    self.onStatusChanged()
+    local prev_state = previous and previous.state or nil
+    local next_state = status and status.state or nil
+    local state_changed = prev_state ~= next_state
+    self.onStatusChanged({
+        state_changed = state_changed,
+        progress_only = not state_changed and next_state == "downloading",
+        state = next_state,
+        key = key,
+    })
 end
 
 function DownloadQueue:getTargetChapterPath(job)
@@ -293,7 +304,7 @@ function DownloadQueue:clearStatus(manga, chapter, options)
     self.statuses[key] = nil
     self:removePersistentJob(key)
     if not options.quiet then
-        self.onStatusChanged()
+        self.onStatusChanged({ state_changed = true, reason = "clear_status" })
     end
 end
 
@@ -324,7 +335,7 @@ function DownloadQueue:cancelPending(manga, chapter)
     if removed then
         self:removePersistentJob(key)
         self.statuses[key] = nil
-        self.onStatusChanged()
+        self.onStatusChanged({ state_changed = true, reason = "cancel_pending" })
         return true, "queued"
     end
 
@@ -369,7 +380,7 @@ function DownloadQueue:cancelQueued()
 
     if canceled > 0 then
         self:savePersistentJobs(remaining_jobs)
-        self.onStatusChanged()
+        self.onStatusChanged({ state_changed = true, reason = "cancel_queued" })
     end
     return canceled
 end
@@ -659,7 +670,7 @@ function DownloadQueue:enqueueBatch(manga, chapters, download_directory, options
     end
 
     self:upsertPersistentJobs(persistent_jobs)
-    self.onStatusChanged()
+    self.onStatusChanged({ state_changed = true, reason = "enqueue_batch" })
     local function triggerProcess()
         self.ui_manager:scheduleIn(0, function()
             self:process()

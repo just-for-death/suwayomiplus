@@ -409,6 +409,38 @@ function Methods:showParallelDownloadsDialog(touchmenu_instance)
     })
 end
 
+function Methods:showAutoDownloadOnLibraryAddDialog(touchmenu_instance)
+    SuwayomiUI.showChoiceDialog({
+        title = I18n.t("When adding manga to library"),
+        current = SuwayomiSettings:loadAutoDownloadOnLibraryAdd(),
+        choices = {
+            { value = "off", label = I18n.t("Off") },
+            { value = "missing", label = I18n.t("Missing on device (also adds to auto-download list)") },
+            { value = "latest", label = I18n.t("Latest unread (also adds to auto-download list)") },
+        },
+        onSelect = function(value)
+            SuwayomiSettings:saveAutoDownloadOnLibraryAdd(value)
+            self:refreshSettingsMenu(touchmenu_instance)
+        end,
+    })
+end
+
+function Methods:showAutoDownloadLatestLimitDialog(touchmenu_instance)
+    local choices = {}
+    for _, limit in ipairs(SuwayomiSettings:getAutoDownloadLatestLimitChoices()) do
+        table.insert(choices, { value = limit, label = I18n.f("%1 chapters", limit) })
+    end
+    SuwayomiUI.showChoiceDialog({
+        title = I18n.t("Latest auto-download count"),
+        current = SuwayomiSettings:loadAutoDownloadLatestLimit(),
+        choices = choices,
+        onSelect = function(value)
+            SuwayomiSettings:saveAutoDownloadLatestLimit(value)
+            self:refreshSettingsMenu(touchmenu_instance)
+        end,
+    })
+end
+
 function Methods:getChapterTapActionSummary()
     if SuwayomiSettings:loadChapterTapAction() == "reader" then
         return I18n.t("Open in reader")
@@ -678,6 +710,51 @@ function Methods:buildSettingsMenu()
                     keep_menu_open = true,
                     callback = function(touchmenu_instance)
                         self:showDeleteFinishedWhileReadingDialog(touchmenu_instance)
+                    end,
+                },
+                {
+                    text_func = function()
+                        return I18n.f(
+                            "On library add: %1",
+                            self:getAutoDownloadModeLabel(SuwayomiSettings:loadAutoDownloadOnLibraryAdd())
+                        )
+                    end,
+                    keep_menu_open = true,
+                    callback = function(touchmenu_instance)
+                        self:showAutoDownloadOnLibraryAddDialog(touchmenu_instance)
+                    end,
+                },
+                {
+                    text_func = function()
+                        return I18n.f(
+                            "Latest chapter count: %1",
+                            SuwayomiSettings:loadAutoDownloadLatestLimit()
+                        )
+                    end,
+                    keep_menu_open = true,
+                    callback = function(touchmenu_instance)
+                        self:showAutoDownloadLatestLimitDialog(touchmenu_instance)
+                    end,
+                },
+                {
+                    text_func = function()
+                        local count = #(SuwayomiSettings:loadAutoDownloadManga() or {})
+                        return I18n.f("Auto-download list: %1", count)
+                    end,
+                    keep_menu_open = true,
+                    callback = function(touchmenu_instance)
+                        self:showAutoDownloadMangaManager({
+                            refresh = function()
+                                self:refreshSettingsMenu(touchmenu_instance)
+                            end,
+                        })
+                    end,
+                },
+                {
+                    text = I18n.t("Download auto-download list now"),
+                    keep_menu_open = true,
+                    callback = function()
+                        self:syncAllAutoDownloadManga()
                     end,
                 },
             },

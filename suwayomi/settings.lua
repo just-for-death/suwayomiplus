@@ -60,6 +60,20 @@ local MANGA_KEEP_NEXT_UNREAD_DOWNLOAD_LIMITS = {
     [10] = true,
     [50] = true,
 }
+local DEFAULT_AUTO_DOWNLOAD_ON_LIBRARY_ADD = "off"
+local AUTO_DOWNLOAD_MODES = {
+    off = true,
+    missing = true,
+    latest = true,
+}
+local DEFAULT_AUTO_DOWNLOAD_LATEST_LIMIT = 10
+local AUTO_DOWNLOAD_LATEST_LIMITS = {
+    [5] = true,
+    [10] = true,
+    [20] = true,
+    [50] = true,
+}
+local MAX_AUTO_DOWNLOAD_MANGA = 50
 local MAX_PINNED_MANGA = 50
 local MAX_RECENT_MANGA = 20
 
@@ -150,6 +164,7 @@ function SuwayomiSettings:normalizeChapterLedgerEntry(entry)
         path = entry.path ~= nil and tostring(entry.path) or nil,
         read = entry.read == true,
         pending_read_sync = entry.pending_read_sync == true or nil,
+        pending_last_page_read = tonumber(entry.pending_last_page_read),
     }
     if entry.pending_read_state ~= nil then
         normalized.pending_read_state = entry.pending_read_state == true or entry.pending_read_state == 1
@@ -428,10 +443,34 @@ end
 
 function SuwayomiSettings:loadDownloadDirectory()
     local dir = self:open():readSetting("download_directory", nil)
-    if type(dir) == "string" and dir ~= "" then
-        return dir
+    if type(dir) ~= "string" or dir == "" then
+        dir = self:getDefaultDownloadDirectory()
     end
-    return self:getDefaultDownloadDirectory()
+    -- Canonicalize against the live filesystem, preferring Books/Manga spelling.
+    local ok_paths, SuwayomiPaths = pcall(require, "suwayomi/paths")
+    if ok_paths and SuwayomiPaths and SuwayomiPaths.canonicalizePath then
+        local real = SuwayomiPaths.canonicalizePath(dir)
+        if type(real) == "string" and real ~= "" then
+            real = real:gsub("/+$", ""):gsub("(/Books/)[Mm]anga$", "%1Manga")
+            if real ~= dir then
+                dir = real
+                self:open():saveSetting("download_directory", dir):flush()
+            end
+        end
+    else
+        local ok, FFIUtil = pcall(require, "ffi/util")
+        if ok and FFIUtil and FFIUtil.realpath then
+            local real = FFIUtil.realpath(dir)
+            if type(real) == "string" and real ~= "" then
+                real = real:gsub("/+$", ""):gsub("(/Books/)[Mm]anga$", "%1Manga")
+                if real ~= dir then
+                    dir = real
+                    self:open():saveSetting("download_directory", dir):flush()
+                end
+            end
+        end
+    end
+    return dir
 end
 
 function SuwayomiSettings:saveDownloadDirectory(path)
@@ -540,6 +579,165 @@ function SuwayomiSettings:saveMangaKeepNextUnreadDownloads(manga, limit)
     end
     self:open():saveSetting("manga_keep_next_unread_downloads", limits):flush()
     return normalized
+end
+
+function SuwayomiSettings:normalizeAutoDownloadMode(mode)
+    local value = tostring(mode or "")
+    if AUTO_DOWNLOAD_MODES[value] then
+        return value
+    end
+    return DEFAULT_AUTO_DOWNLOAD_ON_LIBRARY_ADD
+end
+
+function SuwayomiSettings:loadAutoDownloadOnLibraryAdd()
+    return self:normalizeAutoDownloadMode(
+        self:open():readSetting("auto_download_on_library_add", DEFAULT_AUTO_DOWNLOAD_ON_LIBRARY_ADD)
+    )
+end
+
+function SuwayomiSettings:saveAutoDownloadOnLibraryAdd(mode)
+    local normalized = self:normalizeAutoDownloadMode(mode)
+    self:open():saveSetting("auto_download_on_library_add", normalized):flush()
+    return normalized
+end
+
+function SuwayomiSettings:normalizeAutoDownloadLatestLimit(limit)
+    local value = tonumber(limit) or DEFAULT_AUTO_DOWNLOAD_LATEST_LIMIT
+    if AUTO_DOWNLOAD_LATEST_LIMITS[value] then
+        return value
+    end
+    return DEFAULT_AUTO_DOWNLOAD_LATEST_LIMIT
+end
+
+function SuwayomiSettings:loadAutoDownloadLatestLimit()
+    return self:normalizeAutoDownloadLatestLimit(
+        self:open():readSetting("auto_download_latest_limit", DEFAULT_AUTO_DOWNLOAD_LATEST_LIMIT)
+    )
+end
+
+function SuwayomiSettings:saveAutoDownloadLatestLimit(limit)
+    local normalized = self:normalizeAutoDownloadLatestLimit(limit)
+    self:open():saveSetting("auto_download_latest_limit", normalized):flush()
+    return normalized
+end
+
+function SuwayomiSettings:getAutoDownloadLatestLimitChoices()
+    return { 5, 10, 20, 50 }
+end
+
+local function normalizeAutoDownloadManga(entry)
+    if type(entry) ~= "table" or entry.id == nil then
+        return nil
+    end
+    local mode = tostring(entry.mode or "missing")
+    if mode ~= "missing" and mode ~= "latest" then
+        mode = "missing"
+    end
+    return {
+        id = tostring(entry.id),
+        title = entry.title ~= nil and tostring(entry.title) or tostring(entry.id),
+        thumbnail_url = entry.thumbnail_url or entry.thumbnailUrl,
+        in_library = entry.in_library == true,
+        mode = mode,
+        source = type(entry.source) == "table" and {
+            id = entry.source.id,
+            name = entry.source.name,
+            displayName = entry.source.displayName or entry.source.display_name,
+        } or nil,
+    }
+end
+
+function SuwayomiSettings:loadAutoDownloadManga()
+    local stored = self:open():readSetting("auto_download_manga", {})
+    local list = {}
+    local seen = {}
+    for _, entry in ipairs(type(stored) == "table" and stored or {}) do
+        local normalized = normalizeAutoDownloadManga(entry)
+        if normalized and not seen[normalized.id] and #list < MAX_AUTO_DOWNLOAD_MANGA then
+            seen[normalized.id] = true
+            table.insert(list, normalized)
+        end
+    end
+    return list
+end
+
+function SuwayomiSettings:saveAutoDownloadManga(manga_list)
+    local list = {}
+    local seen = {}
+    for _, entry in ipairs(type(manga_list) == "table" and manga_list or {}) do
+        local normalized = normalizeAutoDownloadManga(entry)
+        if normalized and not seen[normalized.id] and #list < MAX_AUTO_DOWNLOAD_MANGA then
+            seen[normalized.id] = true
+            table.insert(list, normalized)
+        end
+    end
+    self:open():saveSetting("auto_download_manga", list):flush()
+    return list
+end
+
+function SuwayomiSettings:getAutoDownloadMangaEntry(manga)
+    local manga_id = manga and tostring(manga.id or manga)
+    if not manga_id or manga_id == "" then
+        return nil
+    end
+    for _, entry in ipairs(self:loadAutoDownloadManga()) do
+        if entry.id == manga_id then
+            return entry
+        end
+    end
+    return nil
+end
+
+function SuwayomiSettings:upsertAutoDownloadManga(manga, mode)
+    local normalized = normalizeAutoDownloadManga({
+        id = manga and manga.id,
+        title = manga and manga.title,
+        thumbnail_url = manga and (manga.thumbnail_url or manga.thumbnailUrl),
+        in_library = manga and manga.in_library,
+        mode = mode or (manga and manga.mode) or "missing",
+        source = manga and manga.source,
+    })
+    if not normalized then
+        return nil
+    end
+    local list = self:loadAutoDownloadManga()
+    local found = false
+    for index, entry in ipairs(list) do
+        if entry.id == normalized.id then
+            list[index] = normalized
+            found = true
+            break
+        end
+    end
+    if not found then
+        if #list >= MAX_AUTO_DOWNLOAD_MANGA then
+            return nil, "limit"
+        end
+        table.insert(list, normalized)
+    end
+    self:saveAutoDownloadManga(list)
+    return normalized
+end
+
+function SuwayomiSettings:removeAutoDownloadManga(manga)
+    local manga_id = manga and tostring(manga.id or manga)
+    if not manga_id or manga_id == "" then
+        return false
+    end
+    local list = self:loadAutoDownloadManga()
+    local next_list = {}
+    local removed = false
+    for _, entry in ipairs(list) do
+        if entry.id == manga_id then
+            removed = true
+        else
+            table.insert(next_list, entry)
+        end
+    end
+    if removed then
+        self:saveAutoDownloadManga(next_list)
+    end
+    return removed
 end
 
 function SuwayomiSettings:loadMangaScanlatorFilter(manga)
@@ -741,7 +939,7 @@ function SuwayomiSettings:saveReaderReturnContexts(contexts)
     return contexts
 end
 
-local function normalizeSimpleUIManga(manga)
+local function normalizePinnedManga(manga)
     if type(manga) ~= "table" or manga.id == nil then
         return nil
     end
@@ -772,11 +970,20 @@ local function normalizeSimpleUIChapter(chapter)
 end
 
 function SuwayomiSettings:loadPinnedManga()
-    local stored = self:open():readSetting("simpleui_pinned_manga", {})
+    local store = self:open()
+    local stored = store:readSetting("maxoutui_pinned_manga", nil)
+    if stored == nil then
+        stored = store:readSetting("simpleui_pinned_manga", {})
+        if type(stored) == "table" and #stored > 0 then
+            store:saveSetting("maxoutui_pinned_manga", stored)
+            store:delSetting("simpleui_pinned_manga")
+            store:flush()
+        end
+    end
     local pins = {}
     local seen = {}
     for _, manga in ipairs(type(stored) == "table" and stored or {}) do
-        local normalized = normalizeSimpleUIManga(manga)
+        local normalized = normalizePinnedManga(manga)
         if normalized and not seen[normalized.id] and #pins < MAX_PINNED_MANGA then
             seen[normalized.id] = true
             table.insert(pins, normalized)
@@ -789,22 +996,34 @@ function SuwayomiSettings:savePinnedManga(manga_list)
     local pins = {}
     local seen = {}
     for _, manga in ipairs(type(manga_list) == "table" and manga_list or {}) do
-        local normalized = normalizeSimpleUIManga(manga)
+        local normalized = normalizePinnedManga(manga)
         if normalized and not seen[normalized.id] and #pins < MAX_PINNED_MANGA then
             seen[normalized.id] = true
             table.insert(pins, normalized)
         end
     end
-    self:open():saveSetting("simpleui_pinned_manga", pins):flush()
+    local store = self:open()
+    store:saveSetting("maxoutui_pinned_manga", pins)
+    store:delSetting("simpleui_pinned_manga")
+    store:flush()
     return pins
 end
 
 function SuwayomiSettings:loadRecentManga()
-    local stored = self:open():readSetting("simpleui_recent_manga", {})
+    local store = self:open()
+    local stored = store:readSetting("maxoutui_recent_manga", nil)
+    if stored == nil then
+        stored = store:readSetting("simpleui_recent_manga", {})
+        if type(stored) == "table" and #stored > 0 then
+            store:saveSetting("maxoutui_recent_manga", stored)
+            store:delSetting("simpleui_recent_manga")
+            store:flush()
+        end
+    end
     local recents = {}
     local seen = {}
     for _, entry in ipairs(type(stored) == "table" and stored or {}) do
-        local manga = normalizeSimpleUIManga(entry and entry.manga)
+        local manga = normalizePinnedManga(entry and entry.manga)
         local chapter = normalizeSimpleUIChapter(entry and entry.chapter)
         if manga and chapter and not seen[manga.id] and #recents < MAX_RECENT_MANGA then
             seen[manga.id] = true
@@ -822,7 +1041,7 @@ function SuwayomiSettings:saveRecentManga(entries)
     local recents = {}
     local seen = {}
     for _, entry in ipairs(type(entries) == "table" and entries or {}) do
-        local manga = normalizeSimpleUIManga(entry and entry.manga)
+        local manga = normalizePinnedManga(entry and entry.manga)
         local chapter = normalizeSimpleUIChapter(entry and entry.chapter)
         if manga and chapter and not seen[manga.id] and #recents < MAX_RECENT_MANGA then
             seen[manga.id] = true
@@ -833,7 +1052,9 @@ function SuwayomiSettings:saveRecentManga(entries)
             })
         end
     end
-    return self:open():saveSetting("simpleui_recent_manga", recents):flush()
+    local store = self:open()
+    store:delSetting("simpleui_recent_manga")
+    return store:saveSetting("maxoutui_recent_manga", recents):flush()
 end
 function SuwayomiSettings:loadHideStreamTitleBar()
     return self:open():readSetting("hide_stream_title_bar", false) == true

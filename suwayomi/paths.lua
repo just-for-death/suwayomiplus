@@ -36,7 +36,42 @@ local function normalizeDownloadDirectory(download_directory)
     if type(download_directory) ~= "string" or download_directory == "" then
         return nil
     end
-    return download_directory
+    -- Prefer the real on-disk casing (FAT can store Manga vs manga inconsistently).
+    local ok, real = pcall(function()
+        return FFIUtil.realpath(download_directory)
+    end)
+    if ok and type(real) == "string" and real ~= "" then
+        real = real:gsub("/+$", "")
+        -- Canonical spelling for new indexes/settings: Books/Manga (capital M).
+        local preferred = real:gsub("(/Books/)[Mm]anga$", "%1Manga")
+        if preferred ~= real then
+            -- Two-step rename so FAT actually flips the stored name.
+            local tmp = preferred .. ".__case__"
+            local renamed = os.rename(real, tmp) and os.rename(tmp, preferred)
+            if renamed then
+                return preferred
+            end
+            -- Rename failed (busy/permissions): keep preferred spelling in settings/
+            -- indexes; FAT still resolves either casing to the same directory.
+            return preferred
+        end
+        return real
+    end
+    return download_directory:gsub("/+$", ""):gsub("(/Books/)[Mm]anga$", "%1Manga")
+end
+
+--- Canonicalize a path for indexes/sidecars so we never mix Manga/manga casing.
+function SuwayomiPaths.canonicalizePath(path)
+    if type(path) ~= "string" or path == "" then
+        return path
+    end
+    local ok, real = pcall(function()
+        return FFIUtil.realpath(path)
+    end)
+    if ok and type(real) == "string" and real ~= "" then
+        return real:gsub("(/Books/)[Mm]anga(/)", "%1Manga%2"):gsub("(/Books/)[Mm]anga$", "%1Manga")
+    end
+    return path:gsub("(/Books/)[Mm]anga(/)", "%1Manga%2"):gsub("(/Books/)[Mm]anga$", "%1Manga")
 end
 
 local function present(value)
@@ -95,7 +130,9 @@ function SuwayomiPaths.getMangaDirectory(download_directory, manga)
         return nil
     end
     local source_dir = FFIUtil.joinPath(download_directory, SuwayomiPaths.sanitizePathSegment(SuwayomiPaths.getSourceLabel(manga)))
-    return FFIUtil.joinPath(source_dir, SuwayomiPaths.sanitizePathSegment(manga and manga.title))
+    local manga_dir = FFIUtil.joinPath(source_dir, SuwayomiPaths.sanitizePathSegment(manga and manga.title))
+    -- realpath only works once the directory exists; callers create it first.
+    return manga_dir
 end
 
 function SuwayomiPaths.getChapterFilename(chapter)
@@ -205,6 +242,7 @@ function SuwayomiPaths.getTargetPath(download_directory, manga, chapter)
     if not manga_dir then
         return nil, nil
     end
+    manga_dir = SuwayomiPaths.canonicalizePath(manga_dir) or manga_dir
     local chapter_path = FFIUtil.joinPath(
         manga_dir,
         SuwayomiPaths.getChapterFilename(chapter)

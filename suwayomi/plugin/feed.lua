@@ -43,6 +43,7 @@ function Methods:openFeedEntry(entry)
         self:streamChapter(entry.manga, chapter, { chapters = chapters })
     end, {
         defer_empty_context_warning = true,
+        sync_from_server = true,
     })
 end
 

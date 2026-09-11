@@ -98,6 +98,29 @@ function MangaActionMenu.buildMainActions(owner, manga, options)
         text = is_pinned and I18n.t("Unpin from Pinned Manga") or I18n.t("Pin to Pinned Manga"),
     })
 
+    local auto_entry
+    pcall(function()
+        local Settings = require("suwayomi/settings")
+        auto_entry = Settings:getAutoDownloadMangaEntry(manga)
+    end)
+    if auto_entry then
+        table.insert(actions, { id = "auto_download_manage", text = I18n.t("Auto-download options"), submenu = true })
+        table.insert(actions, {
+            id = "remove_auto_download",
+            text = I18n.t("Remove from auto-download"),
+            destructive = true,
+        })
+    else
+        table.insert(actions, {
+            id = "add_auto_download_missing",
+            text = I18n.t("Auto-download: Missing"),
+        })
+        table.insert(actions, {
+            id = "add_auto_download_latest",
+            text = I18n.t("Auto-download: Latest"),
+        })
+    end
+
     table.insert(actions, { id = "bulk_downloads", text = I18n.t("Bulk downloads"), submenu = true })
     table.insert(actions, { id = "keep_downloaded", text = I18n.t("Download ahead"), submenu = true })
     table.insert(actions, { id = "delete_read_downloaded", text = I18n.t("Delete read downloads"), destructive = true })
@@ -127,6 +150,14 @@ function MangaActionMenu.buildKeepDownloadedActions()
     }
 end
 
+function MangaActionMenu.buildAutoDownloadActions()
+    return {
+        { id = "auto_download_mode_missing", text = I18n.t("Mode: Missing") },
+        { id = "auto_download_mode_latest", text = I18n.t("Mode: Latest") },
+        { id = "auto_download_now", text = I18n.t("Download now") },
+    }
+end
+
 function MangaActionMenu.isSharedAction(action_id)
     if action_id == "manga_information"
         or action_id == "open_first_unread"
@@ -135,6 +166,13 @@ function MangaActionMenu.isSharedAction(action_id)
         or action_id == "remove_from_library"
         or action_id == "pin_manga"
         or action_id == "unpin_manga"
+        or action_id == "add_auto_download_missing"
+        or action_id == "add_auto_download_latest"
+        or action_id == "remove_auto_download"
+        or action_id == "auto_download_manage"
+        or action_id == "auto_download_mode_missing"
+        or action_id == "auto_download_mode_latest"
+        or action_id == "auto_download_now"
         or action_id == "delete_read_downloaded"
         or action_id == "download_first_unread"
         or action_id == "download_all_unread"

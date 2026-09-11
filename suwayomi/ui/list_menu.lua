@@ -405,6 +405,11 @@ function ListMenuItem:buildRowWidget(width, height)
         )
     end
     local title_height = subtitle and math.max(1, height - subtitle_height) or height
+    local title_fgcolor = nil
+    if self.entry.dimmed == true then
+        -- Read chapters: grey title so unread stays visually primary.
+        title_fgcolor = Blitbuffer.COLOR_DARK_GRAY
+    end
     local title = fittingTextBox{
         text = BD.auto(tostring(self.text or "")),
         font = "cfont",
@@ -413,6 +418,7 @@ function ListMenuItem:buildRowWidget(width, height)
         height = title_height,
         alignment = "left",
         bold = self.entry.title_bold == true,
+        fgcolor = title_fgcolor,
     }
     local text_column = title
     if subtitle then

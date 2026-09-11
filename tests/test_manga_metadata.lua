@@ -93,7 +93,11 @@ io.open = function(path, mode)
     if mode == "w" then
         local buf = {}
         return {
-            write = function(self, data) buf[#buf + 1] = data end,
+            write = function(self, ...)
+                for i = 1, select("#", ...) do
+                    buf[#buf + 1] = tostring(select(i, ...))
+                end
+            end,
             close = function(self)
                 io_cap.path    = path
                 io_cap.content = table.concat(buf)
@@ -242,7 +246,7 @@ do
 end
 
 -- ===========================================================================
--- Test 7: sdr path is path .. ".sdr/metadata.cbz.lua"
+-- Test 7: sdr path matches KOReader DocSettings (strip last suffix + .sdr)
 -- ===========================================================================
 
 do
@@ -251,9 +255,9 @@ do
     local chapter = { id = "c8", name = "Chapter 1", chapter_number = 1 }
     local cbz_path = "/manga/Chapter 1.cbz"
     MangaMetadata.writeChapterMetadata(cbz_path, manga, chapter)
-    local expected_meta_path = cbz_path .. ".sdr/metadata.cbz.lua"
+    local expected_meta_path = "/manga/Chapter 1.sdr/metadata.cbz.lua"
     assert_eq(io_cap.path, expected_meta_path,
-        "sdr path: metadata written to <cbz>.sdr/metadata.cbz.lua")
+        "sdr path: metadata written to <base>.sdr/metadata.cbz.lua (KOReader style)")
 end
 
 -- ===========================================================================

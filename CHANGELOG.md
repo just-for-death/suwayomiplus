@@ -1,5 +1,58 @@
 # Changelog
 
+## v1.3.18
+
+- Fix read-sync ledger dropping `pending_last_page_read` (offline page progress).
+- Run pending read sync in a subprocess (no UI-thread GraphQL batch).
+- Reconcile finished local CBZs into pending sync on Downloads open and plugin init.
+- Set `pending_read_state` when KOReader marks chapters finished in the chapter list.
+- Save ledger after chapter-menu refresh for bulk mark-read.
+- Auto-download: cap missing queues; on-add also tracks the manga; clearer settings labels.
+
+## v1.3.17
+
+- Auto-download: on library add (Off / Missing / Latest), tracked manga list,
+  quiet queue helper, Downloads settings entries, and manga actions to add or
+  manage auto-download modes.
+
+## v1.3.16
+
+- Two-way read sync when opening a manga: always pull latest `isRead` from
+  Suwayomi (Resume / next unread / History / chapter list), then push any
+  pending Kindle-side read marks.
+- Grey out read chapter titles in the chapter list (`dimmed` → dark gray).
+
+## v1.3.15
+
+- Stop rebuilding the chapter list on every download page-progress tick. Progress
+  updates refresh the Downloads menu only; chapter menus refresh on state changes
+  (queued / downloaded / failed) and only while that menu is actually visible.
+- Guard `refreshChapterMenu` with `pcall` so a mid-rebuild widget (`nil dimen`)
+  cannot tear down KOReader.
+
+## v1.3.14
+
+- Debounce chapter/downloads menu refresh during download progress (1.5s). Rebuilding
+  huge chapter lists (e.g. One Piece ~400) on every page tick froze the Kindle and
+  contributed to `IconButton` nil-`dimen` crashes.
+
+## v1.3.13
+
+- Prefer decoding the Suwayomi thumbnail to JPEG before falling back to the first
+  chapter page (avoids installing a random page as the folder cover).
+- Write folder covers only from the parent process after a chapter finishes, so a
+  WebP-incapable download subprocess cannot lock in a page-fallback cover.
+
+## v1.3.12
+
+- Fix folder covers on Kindle: BusyBox `unzip` has no `-Z1`, so the CBZ page
+  fallback never ran after WebP thumbnail conversion failed. Parse `unzip -l`
+  instead and copy JPEG chapter pages directly when possible.
+- Prefer first-chapter JPEG pages over WebP/PNG thumbnails that need a decoder
+  the download subprocess often lacks.
+- Keep download-directory path casing aligned with the live filesystem
+  (`Books/Manga` vs `Books/manga`).
+
 ## v1.3.8
 
 - Fix download-queue busy-loop when an inline job is deferred while another job is active (`max_parallel > 1`).
