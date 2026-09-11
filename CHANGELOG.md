@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.3.19
+
+- Add long-press / hold gesture on manga cards in Manga Library to open the manga quick action menu.
+- Add Download Missing Chapters, Trackers, and Chapters shortcuts to the Manga Manager menu.
+- Enhance Auto Download integration with MaxOutUI Quick Action row and homescreen modules.
+
 ## v1.3.18
 
 - Fix read-sync ledger dropping `pending_last_page_read` (offline page progress).
