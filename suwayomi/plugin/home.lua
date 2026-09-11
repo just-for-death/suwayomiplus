@@ -146,6 +146,10 @@ function Methods:showLibrary()
     return self:getClient():showLibrary()
 end
 
+function Methods:showLibraryByCategory(category)
+    return self:getClient():showLibraryManga(category)
+end
+
 
 function Methods:closeMenu(menu)
     if menu and UIManager.close then

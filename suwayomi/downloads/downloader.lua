@@ -12,6 +12,7 @@ local Archiver = require("ffi/archiver")
 local SuwayomiAPI = require("suwayomi/api")
 local ProgressFile = require("suwayomi/downloads/progress_file")
 local SuwayomiPaths = require("suwayomi/paths")
+local bit = rawget(_G, "bit") or require("bit")
 
 local Downloader = {}
 local DOWNLOAD_RETRY_DELAYS_SECONDS = { 0.5, 1 }
@@ -49,6 +50,150 @@ local function tryWriteMangaCover(manga_dir, manga, credentials)
             MM.writeMangaCover(manga_dir, manga, credentials)
         end
     end)
+end
+
+-- Public so active_jobs (subprocess + inline finish) can write sidecars once.
+function Downloader:writeSidecarsForChapter(final_path, manga, chapter, credentials)
+    tryWriteChapterMetadata(final_path, manga, chapter)
+    local manga_dir = final_path and tostring(final_path):match("^(.*)/[^/]+$")
+    tryWriteMangaCover(manga_dir, manga, credentials)
+end
+
+-- CRC-32 for store-method ZIP entries (Kindle FSP is unreliable with libarchive
+-- streaming writes, so we prefer a simple STORED zip built with plain file IO).
+local crc_table
+local function crc32(data)
+    if not crc_table then
+        crc_table = {}
+        for i = 0, 255 do
+            local c = i
+            for _ = 1, 8 do
+                if c % 2 == 1 then
+                    c = bit.bxor(bit.rshift(c, 1), 0xEDB88320)
+                else
+                    c = bit.rshift(c, 1)
+                end
+            end
+            crc_table[i] = c
+        end
+    end
+    local crc = 0xFFFFFFFF
+    for i = 1, #data do
+        local b = data:byte(i)
+        crc = bit.bxor(bit.rshift(crc, 8), crc_table[bit.band(bit.bxor(crc, b), 0xFF)])
+    end
+    -- LuaJIT bit ops are signed; keep CRC in unsigned 32-bit range for ZIP headers.
+    return bit.band(bit.bxor(crc, 0xFFFFFFFF), 0xFFFFFFFF)
+end
+
+local function u16(n)
+    n = bit.band(n or 0, 0xFFFF)
+    return string.char(bit.band(n, 0xFF), bit.rshift(n, 8))
+end
+
+local function u32(n)
+    n = bit.band(n or 0, 0xFFFFFFFF)
+    return string.char(
+        bit.band(n, 0xFF),
+        bit.band(bit.rshift(n, 8), 0xFF),
+        bit.band(bit.rshift(n, 16), 0xFF),
+        bit.band(bit.rshift(n, 24), 0xFF)
+    )
+end
+
+-- Build a STORED (no compression) zip from on-disk page files.
+-- Avoids Archiver.Writer:addFileFromMemory "Write error" on Kindle FSP.
+local function writeStoredZipFromFiles(zip_path, files)
+    local out = io.open(zip_path, "wb")
+    if not out then
+        return false, "Could not create chapter archive."
+    end
+
+    local entries = {}
+    for _, file in ipairs(files) do
+        local handle = io.open(file.path, "rb")
+        if not handle then
+            out:close()
+            os.remove(zip_path)
+            return false, "Could not read downloaded page file."
+        end
+        local data = handle:read("*a") or ""
+        handle:close()
+        local offset = out:seek()
+        local name = file.name
+        local crc = crc32(data)
+        local size = #data
+        -- Local file header (STORED)
+        out:write("PK\003\004")
+        out:write(u16(20))      -- version needed
+        out:write(u16(0))       -- flags
+        out:write(u16(0))       -- method store
+        out:write(u16(0))       -- time
+        out:write(u16(0))       -- date
+        out:write(u32(crc))
+        out:write(u32(size))
+        out:write(u32(size))
+        out:write(u16(#name))
+        out:write(u16(0))       -- extra len
+        out:write(name)
+        out:write(data)
+        entries[#entries + 1] = {
+            name = name,
+            crc = crc,
+            size = size,
+            offset = offset,
+        }
+    end
+
+    local cd_offset = out:seek()
+    for _, entry in ipairs(entries) do
+        out:write("PK\001\002")
+        out:write(u16(20))      -- version made by
+        out:write(u16(20))      -- version needed
+        out:write(u16(0))
+        out:write(u16(0))       -- store
+        out:write(u16(0))
+        out:write(u16(0))
+        out:write(u32(entry.crc))
+        out:write(u32(entry.size))
+        out:write(u32(entry.size))
+        out:write(u16(#entry.name))
+        out:write(u16(0))
+        out:write(u16(0))
+        out:write(u16(0))
+        out:write(u16(0))
+        out:write(u32(0))
+        out:write(u32(entry.offset))
+        out:write(entry.name)
+    end
+    local cd_size = out:seek() - cd_offset
+    out:write("PK\005\006")
+    out:write(u16(0))
+    out:write(u16(0))
+    out:write(u16(#entries))
+    out:write(u16(#entries))
+    out:write(u32(cd_size))
+    out:write(u32(cd_offset))
+    out:write(u16(0))
+    out:close()
+    return true
+end
+
+local function removeDirectoryTree(path)
+    if not path or path == "" or not lfs.attributes then
+        return
+    end
+    local mode = lfs.attributes(path, "mode")
+    if mode == "directory" then
+        for name in lfs.dir(path) do
+            if name ~= "." and name ~= ".." then
+                removeDirectoryTree(path .. "/" .. name)
+            end
+        end
+        lfs.rmdir(path)
+    elseif mode == "file" then
+        os.remove(path)
+    end
 end
 
 -- Large chapters routinely take minutes over a remote link; the per-request
@@ -598,6 +743,7 @@ function Downloader:startChapterDownload(credentials, download_directory, manga,
     end
     local chapter_path_candidates = self:getChapterPathCandidates(download_directory, manga, chapter)
     local partial_path = self:getPartialPath(chapter_path)
+    local pages_dir = tostring(partial_path) .. ".pages"
 
     local page_result = callWithTransientRetry(function()
         return SuwayomiAPI.fetchChapterPages(credentials, chapter.id)
@@ -614,16 +760,18 @@ function Downloader:startChapterDownload(credentials, download_directory, manga,
         return { ok = false, error = directory_error }
     end
 
-    pcall(function()
-        self:ensureMangaCover(credentials, manga_dir, manga)
-    end)
+    -- Cover download is deferred to writeSidecarsForChapter after the CBZ is
+    -- ready. Doing it here blocked the UI event loop for a full binary GET.
 
     self:cleanupPartialFile(partial_path)
-    local writer = Archiver.Writer:new()
-    if not writer:open(partial_path, "zip") then
-        return { ok = false, error = writer.err or "Could not create chapter archive." }
+    removeDirectoryTree(pages_dir)
+    local pages_ok, pages_error = self:ensureDirectory(pages_dir)
+    if not pages_ok then
+        return { ok = false, error = pages_error or "Could not create chapter page folder." }
     end
 
+    -- Kindle FSP often fails Archiver.Writer:addFileFromMemory with "Write error".
+    -- Download pages to disk first; pack a STORED zip with plain file IO at the end.
     return {
         ok = true,
         path = chapter_path,
@@ -631,7 +779,8 @@ function Downloader:startChapterDownload(credentials, download_directory, manga,
         job = {
             credentials = credentials,
             pages = page_result.pages,
-            writer = writer,
+            page_files = {},
+            pages_dir = pages_dir,
             chapter_path = chapter_path,
             chapter_path_candidates = chapter_path_candidates,
             partial_path = partial_path,
@@ -654,6 +803,39 @@ function Downloader:validatePage(binary)
     return true
 end
 
+function Downloader:packPageFiles(job)
+    local files = {}
+    for index = 1, #(job.page_files or {}) do
+        local page_file = job.page_files[index]
+        if not page_file or not page_file.path or lfs.attributes(page_file.path, "mode") ~= "file" then
+            return {
+                ok = false,
+                error = "Chapter page files are incomplete.",
+                current = job.current,
+                total = #(job.pages or {}),
+                path = job.chapter_path,
+            }
+        end
+        files[#files + 1] = page_file
+    end
+
+    self:cleanupPartialFile(job.partial_path)
+    local ok, err = writeStoredZipFromFiles(job.partial_path, files)
+    if not ok then
+        self:cleanupPartialFile(job.partial_path)
+        return {
+            ok = false,
+            error = err or "Could not write chapter archive.",
+            current = job.current,
+            total = #(job.pages or {}),
+            path = job.chapter_path,
+        }
+    end
+
+    removeDirectoryTree(job.pages_dir)
+    return self:finalizeChapterArchive(job)
+end
+
 function Downloader:finalizeChapterArchive(job)
     local written = job.written
     if written == nil then
@@ -662,6 +844,7 @@ function Downloader:finalizeChapterArchive(job)
 
     if written ~= #job.pages then
         self:cleanupPartialFile(job.partial_path)
+        removeDirectoryTree(job.pages_dir)
         return {
             ok = false,
             error = "Chapter archive page count did not match Suwayomi page count.",
@@ -674,6 +857,7 @@ function Downloader:finalizeChapterArchive(job)
     local existing_path = self:findExistingPathInCandidates(job.chapter_path_candidates)
     if existing_path then
         self:cleanupPartialFile(job.partial_path)
+        removeDirectoryTree(job.pages_dir)
         return {
             ok = true,
             done = true,
@@ -688,6 +872,7 @@ function Downloader:finalizeChapterArchive(job)
     if not renamed then
         if self:chapterExists(job.chapter_path) then
             self:cleanupPartialFile(job.partial_path)
+            removeDirectoryTree(job.pages_dir)
             return {
                 ok = true,
                 done = true,
@@ -698,6 +883,7 @@ function Downloader:finalizeChapterArchive(job)
             }
         end
         self:cleanupPartialFile(job.partial_path)
+        removeDirectoryTree(job.pages_dir)
         local error_message = "Could not finalize chapter archive."
         if rename_error and tostring(rename_error) ~= "" then
             error_message = error_message .. " " .. tostring(rename_error)
@@ -711,6 +897,7 @@ function Downloader:finalizeChapterArchive(job)
         }
     end
 
+    removeDirectoryTree(job.pages_dir)
     return {
         ok = true,
         done = true,
@@ -726,14 +913,7 @@ function Downloader:downloadNextPage(job)
     end
 
     if job.current >= #job.pages then
-        if job.writer then
-            local closed, close_error = self:closeArchiveWriter(job.writer)
-            job.writer = nil
-            if not closed then
-                return self:failAndCleanup(close_error, job.partial_path)
-            end
-        end
-        return self:finalizeChapterArchive(job)
+        return self:packPageFiles(job)
     end
 
     local next_index = job.current + 1
@@ -741,10 +921,12 @@ function Downloader:downloadNextPage(job)
         return SuwayomiAPI.downloadBinary(job.credentials, job.pages[next_index])
     end)
     if not binary.ok then
+        removeDirectoryTree(job.pages_dir)
         return self:failAndCleanup(binary.error, job.partial_path, job.writer)
     end
     local valid_page, validation_error = self:validatePage(binary)
     if not valid_page then
+        removeDirectoryTree(job.pages_dir)
         return self:failAndCleanup(validation_error, job.partial_path, job.writer)
     end
 
@@ -753,25 +935,34 @@ function Downloader:downloadNextPage(job)
         or "jpg"
 
     local entry_name = string.format("%04d.%s", next_index, ext)
-    if not job.writer:addFileFromMemory(entry_name, binary.body) then
-        return self:failAndCleanup(job.writer.err or "Could not write chapter archive.", job.partial_path, job.writer)
+    local page_path = (job.pages_dir or (tostring(job.partial_path) .. ".pages")) .. "/" .. entry_name
+    local handle = io.open(page_path, "wb")
+    if not handle then
+        removeDirectoryTree(job.pages_dir)
+        return self:failAndCleanup("Could not write chapter page to disk.", job.partial_path, job.writer)
+    end
+    local written_ok, write_err = handle:write(binary.body)
+    handle:close()
+    if written_ok == false then
+        removeDirectoryTree(job.pages_dir)
+        return self:failAndCleanup(
+            "Could not write chapter page to disk. " .. tostring(write_err or "Write error"),
+            job.partial_path,
+            job.writer
+        )
     end
 
+    job.page_files = job.page_files or {}
+    job.page_files[next_index] = { name = entry_name, path = page_path }
     job.current = next_index
     job.written = (job.written or 0) + 1
-    local done = job.current == #job.pages
-    if done then
-        local closed, close_error = self:closeArchiveWriter(job.writer)
-        job.writer = nil
-        if not closed then
-            return self:failAndCleanup(close_error, job.partial_path)
-        end
-        return self:finalizeChapterArchive(job)
+    if job.current == #job.pages then
+        return self:packPageFiles(job)
     end
 
     return {
         ok = true,
-        done = done,
+        done = false,
         current = job.current,
         total = #job.pages,
         path = job.chapter_path,

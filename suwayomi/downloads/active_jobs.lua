@@ -90,6 +90,9 @@ function ActiveJobs:writeProgressFallback(progress_path, state, current, total, 
 end
 
 function ActiveJobs:runDownloaderJob(queued)
+    -- Full chapter download in the child process so the Kindle UI stays
+    -- responsive. Prefer the server CBZ stream; page assembly stays here too
+    -- (never on the UI thread). A minizip crash fails the child job only.
     if queued.downloader.downloadChapterWithProgress then
         queued.downloader:downloadChapterWithProgress(
             queued.credentials,
@@ -98,14 +101,14 @@ function ActiveJobs:runDownloaderJob(queued)
             queued.chapter,
             queued.progress_path
         )
-        return
+        os.exit(0)
     end
 
     local result = queued.downloader:startChapterDownload(queued.credentials, queued.download_directory, queued.manga, queued.chapter)
     if not result.ok or result.skipped then
         local state = result.skipped and "skipped" or (result.ok and "downloaded" or "failed")
         self:writeProgressFallback(queued.progress_path, state, result.ok and 1 or 0, result.ok and 1 or 0, result.path, result.error)
-        return
+        os.exit(0)
     end
 
     repeat
@@ -137,6 +140,16 @@ function ActiveJobs:stepInlineJob(queued)
         )
         if not start_res.ok or start_res.skipped then
             local final_state = start_res.skipped and "skipped" or (start_res.ok and "downloaded" or "failed")
+            if start_res.ok and start_res.path and queued.downloader.writeSidecarsForChapter then
+                pcall(function()
+                    queued.downloader:writeSidecarsForChapter(
+                        start_res.path,
+                        queued.manga,
+                        queued.chapter,
+                        queued.credentials
+                    )
+                end)
+            end
             self:writeProgressFallback(
                 queued.progress_path,
                 final_state,
@@ -145,6 +158,16 @@ function ActiveJobs:stepInlineJob(queued)
                 start_res.path,
                 start_res.error
             )
+            self:finishFromProgress(queued, {
+                state = final_state,
+                current = start_res.ok and 1 or 0,
+                total = start_res.ok and 1 or 0,
+                path = start_res.path,
+                error = start_res.error,
+            })
+            if queue.process then
+                queue:process()
+            end
             return
         end
         queued.download_job = start_res.job
@@ -167,6 +190,16 @@ function ActiveJobs:stepInlineJob(queued)
             self:stepInlineJob(queued)
         end)
     else
+        if page_res.ok and page_res.path and queued.downloader.writeSidecarsForChapter then
+            pcall(function()
+                queued.downloader:writeSidecarsForChapter(
+                    page_res.path,
+                    queued.manga,
+                    queued.chapter,
+                    queued.credentials
+                )
+            end)
+        end
         self:finishFromProgress(queued, {
             state = page_res.ok and "downloaded" or "failed",
             current = page_res.current or 0,
@@ -178,6 +211,30 @@ function ActiveJobs:stepInlineJob(queued)
             queue:process()
         end
     end
+end
+
+function ActiveJobs:startInlineJob(queued)
+    local queue = self.queue
+    -- Inline = sync HTTP on the UI thread. Only allow one, and only when fork fails.
+    if self:getCount() > 0 then
+        table.insert(queue.items, 1, queued)
+        queue:setStatus(queued.manga, queued.chapter, { state = "queued", purpose = queued.purpose })
+        return false
+    end
+    queued.inline = true
+    queued.pid = nil
+    queued.download_job = nil
+    self:setJob(queued)
+    queue:setStatus(queued.manga, queued.chapter, {
+        state = "downloading",
+        current = queued.last_progress_current or 0,
+        total = queued.last_progress_total or 0,
+        purpose = queued.purpose,
+    })
+    queue.ui_manager:scheduleIn(0.05, function()
+        self:stepInlineJob(queued)
+    end)
+    return true
 end
 
 function ActiveJobs:startQueuedJob(queued)
@@ -206,22 +263,33 @@ function ActiveJobs:startQueuedJob(queued)
         },
     }))
 
-    -- Mark as an inline job so poll() skips it. Inline jobs finish via
-    -- stepInlineJob callbacks and must not be touched by the subprocess poll.
-    queued.inline = true
-    queued.pid = nil
-    self:setJob(queued)
-    queue:setStatus(queued.manga, queued.chapter, {
-        state = "downloading",
-        current = 0,
-        total = 0,
-        purpose = queued.purpose,
-    })
+    -- Always prefer a real subprocess (direct CBZ or page assembly). The Kindle
+    -- hang was caused by running page downloads on the UI thread after need_inline.
+    if queue.ffi_util and type(queue.ffi_util.runInSubProcess) == "function" then
+        local pid, err = queue.ffi_util.runInSubProcess(function()
+            self:runDownloaderJob(queued)
+        end)
+        if pid then
+            queued.inline = false
+            queued.pid = pid
+            self:setJob(queued)
+            queue:setStatus(queued.manga, queued.chapter, {
+                state = "downloading",
+                current = 0,
+                total = 0,
+                purpose = queued.purpose,
+            })
+            self:schedulePoll()
+            return true
+        end
+        queue:logDebug({
+            operation = "downloadQueue.startQueuedJob",
+            event = "subprocess_unavailable",
+            error = err and tostring(err) or "unknown",
+        })
+    end
 
-    queue.ui_manager:scheduleIn(0.05, function()
-        self:stepInlineJob(queued)
-    end)
-    return true
+    return self:startInlineJob(queued)
 end
 
 function ActiveJobs:process()

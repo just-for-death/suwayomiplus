@@ -592,7 +592,15 @@ function DownloadQueue:enqueue(manga, chapter, download_directory, options)
     })
 
     self.ui_manager:scheduleIn(0, function()
-        self:process()
+        local function triggerProcess()
+            self:process()
+        end
+        local ok_net, NetworkMgr = pcall(require, "ui/network/manager")
+        if ok_net and NetworkMgr and NetworkMgr.runWhenOnline then
+            NetworkMgr:runWhenOnline(triggerProcess)
+        else
+            triggerProcess()
+        end
     end)
     return true, enqueue_state
 end
