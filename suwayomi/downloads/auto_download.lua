@@ -271,24 +271,40 @@ function Methods:showAutoDownloadMangaManager(options)
         if not entry then
             return
         end
+        local cur_mode = entry.mode or "missing"
         SuwayomiUI.showActionMenu({
             title = entry.title or entry.id,
             actions = {
-                { id = "mode_missing", text = I18n.t("Mode: Missing") },
-                { id = "mode_latest", text = I18n.t("Mode: Latest") },
-                { id = "download_now", text = I18n.t("Download now") },
-                { id = "remove", text = I18n.t("Remove"), destructive = true },
+                { id = "download_missing", text = I18n.t("Download missing chapters") },
+                { id = "download_now", text = I18n.f("Download now (%1)", modeLabel(cur_mode)) },
+                { id = "mode_missing", text = cur_mode == "missing" and (I18n.t("Mode: Missing") .. " (Active)") or I18n.t("Mode: Missing") },
+                { id = "mode_latest", text = cur_mode == "latest" and (I18n.t("Mode: Latest") .. " (Active)") or I18n.t("Mode: Latest") },
+                { id = "trackers", text = I18n.t("Trackers") },
+                { id = "open_chapters", text = I18n.t("Open chapters") },
+                { id = "remove", text = I18n.t("Remove from auto-download"), destructive = true },
             },
         }, function(sub)
             if not sub then
                 return
             end
-            if sub.id == "mode_missing" then
+            if sub.id == "download_missing" then
+                self:enqueueAutoDownloadForManga(entry, "missing")
+            elseif sub.id == "download_now" then
+                self:enqueueAutoDownloadForManga(entry, entry.mode)
+            elseif sub.id == "mode_missing" then
                 self:setAutoDownloadMangaMode(entry, "missing")
             elseif sub.id == "mode_latest" then
                 self:setAutoDownloadMangaMode(entry, "latest")
-            elseif sub.id == "download_now" then
-                self:enqueueAutoDownloadForManga(entry, entry.mode)
+            elseif sub.id == "trackers" then
+                if self.showMangaTrackers then
+                    self:showMangaTrackers(entry)
+                elseif self.performMangaAction then
+                    self:performMangaAction(entry, "trackers")
+                end
+            elseif sub.id == "open_chapters" then
+                if self.showChaptersForManga then
+                    self:showChaptersForManga(entry)
+                end
             elseif sub.id == "remove" then
                 self:removeMangaFromAutoDownload(entry)
             end
