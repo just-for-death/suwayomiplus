@@ -58,7 +58,8 @@ local MODULE_PATH = tests_dir() .. "../suwayomi/downloads/manga_metadata.lua"
 -- ---------------------------------------------------------------------------
 
 local mock_lfs = {
-    _mode     = {},      -- { [path] = "directory" } for paths that "exist"
+    _mode     = {},      -- { [path] = "directory" | "file" } for paths that "exist"
+    _dir      = {},      -- { [dir_path] = { name1, name2, ... } } for lfs.dir
     mkdir_ok  = true,    -- controls whether mkdir succeeds
 }
 
@@ -79,18 +80,38 @@ package.preload["suwayomi/fs"] = function()
             end
             return nil   -- simulate FAT32 permission failure
         end,
+        dir = function(path)
+            local names = mock_lfs._dir[path] or {}
+            local i = 0
+            return function()
+                i = i + 1
+                return names[i]
+            end
+        end,
     }
 end
 
 -- ---------------------------------------------------------------------------
--- Mock: io.open — captures writes, returns nil for reads
+-- Mock: io.open — captures writes, serves reads from an in-memory file map
 -- ---------------------------------------------------------------------------
 
 local real_io_open = io.open
 local io_cap = { path = nil, content = nil }
+local FILES = {}   -- in-memory filesystem for reads: [path] = raw content
+local WROTE = {}   -- every written file: [path] = final content
 
 io.open = function(path, mode)
-    if mode == "w" then
+    if mode == "r" or mode == "rb" then
+        local content = FILES[path]
+        if content == nil then return nil end
+        return {
+            read = function(self, fmt)
+                return content
+            end,
+            close = function(self) end,
+        }
+    end
+    if mode == "w" or mode == "wb" then
         local buf = {}
         return {
             write = function(self, ...)
@@ -99,12 +120,14 @@ io.open = function(path, mode)
                 end
             end,
             close = function(self)
+                local text = table.concat(buf)
                 io_cap.path    = path
-                io_cap.content = table.concat(buf)
+                io_cap.content = text
+                WROTE[path]    = text
             end,
         }
     end
-    return nil  -- no reads needed for these tests
+    return nil  -- unsupported modes
 end
 
 -- ---------------------------------------------------------------------------
@@ -125,9 +148,12 @@ end
 
 local function reset()
     mock_lfs._mode  = { ["/manga"] = "directory" }   -- manga dir pre-exists
+    mock_lfs._dir   = {}
     mock_lfs.mkdir_ok = true
     io_cap.path    = nil
     io_cap.content = nil
+    FILES = {}
+    WROTE = {}
 end
 
 -- ---------------------------------------------------------------------------
@@ -352,6 +378,140 @@ do
     reset()
     local ok = MangaMetadata.writeChapterMetadata("", {}, {})
     assert_false(ok, "empty path: writeChapterMetadata returns false without crash")
+end
+
+-- ===========================================================================
+-- Test 13: fresh downloads pre-seed Manga Reading Mode (Fix 2)
+--          fit-to-page zoom, RTL paging, no webtoon-like vertical scroll
+-- ===========================================================================
+
+do
+    reset()
+    local manga   = { id = "m1", title = "My Manga" }
+    local chapter = { id = "c13", name = "Ch 1", chapter_number = 1 }
+    MangaMetadata.writeChapterMetadata("/manga/Ch.cbz", manga, chapter)
+    local meta = load_content(io_cap.content)
+    assert_not_nil(meta, "reading mode pre-seed: valid Lua")
+    assert_eq(meta.zoom_mode, "page",
+        "reading mode pre-seed: zoom_mode = 'page' (fit whole page)")
+    assert_eq(meta.normal_zoom_mode, "page",
+        "reading mode pre-seed: normal_zoom_mode = 'page'")
+    assert_eq(meta.inverse_reading_order, true,
+        "reading mode pre-seed: inverse_reading_order = true (RTL manga paging)")
+    assert_eq(meta.kopt_page_scroll, 0,
+        "reading mode pre-seed: kopt_page_scroll = 0 (no continuous vertical scroll)")
+    assert_eq(meta.flipping_scroll_mode, false,
+        "reading mode pre-seed: flipping_scroll_mode = false")
+end
+
+-- ===========================================================================
+-- Test 14: an existing NON-nil user value is preserved by writeChapterMetadata
+--          (pre-seed only fills nil, so a user tweak survives metadata rewrites)
+-- ===========================================================================
+
+do
+    reset()
+    mock_lfs._mode["/manga"] = "directory"
+    FILES["/manga/Ch.sdr/metadata.cbz.lua"] = [[return {
+        ["doc_props"] = { title = "Ch 1", series = "My Manga", series_index = 1 },
+        ["zoom_mode"] = "container",
+        ["inverse_reading_order"] = false,
+        ["suwayomi_chapter_id"] = "c14",
+        ["suwayomi_manga_id"] = "m1",
+    }]]
+    local manga   = { id = "m1", title = "My Manga" }
+    local chapter = { id = "c14", name = "Ch 1", chapter_number = 1 }
+    MangaMetadata.writeChapterMetadata("/manga/Ch.cbz", manga, chapter)
+    local meta = load_content(io_cap.content)
+    assert_not_nil(meta, "preserve user values: valid Lua")
+    assert_eq(meta.zoom_mode, "container",
+        "preserve user values: existing zoom_mode not overwritten by pre-seed")
+    assert_eq(meta.inverse_reading_order, false,
+        "preserve user values: existing inverse_reading_order not overwritten")
+    assert_eq(meta.normal_zoom_mode, "page",
+        "preserve user values: missing normal_zoom_mode still pre-seeded to page")
+end
+
+-- ===========================================================================
+-- Test 15: normalizeReadingMode migrates a legacy "contentwidth" sidecar
+--          (Fix 3 core: replace zoom, enable RTL, clear fractional positions)
+-- ===========================================================================
+
+do
+    local legacy = {
+        zoom_mode             = "contentwidth",
+        normal_zoom_mode      = "contentwidth",
+        inverse_reading_order = false,
+        kopt_page_scroll      = 1,
+        flipping_scroll_mode  = true,
+        page_positions        = { 0.875, 0.766 },
+    }
+    local migrated = MangaMetadata.normalizeReadingMode(legacy)
+    assert_eq(migrated, legacy, "normalizeReadingMode mutates and returns the same table")
+    assert_eq(migrated.zoom_mode, "page",
+        "normalizeReadingMode: contentwidth zoom → page")
+    assert_eq(migrated.normal_zoom_mode, "page",
+        "normalizeReadingMode: normal_zoom_mode contentwidth → page")
+    assert_eq(migrated.inverse_reading_order, true,
+        "normalizeReadingMode: inverse_reading_order forced true")
+    assert_eq(migrated.kopt_page_scroll, 0,
+        "normalizeReadingMode: kopt_page_scroll forced 0")
+    assert_eq(migrated.flipping_scroll_mode, false,
+        "normalizeReadingMode: flipping_scroll_mode forced false")
+    assert_eq(#migrated.page_positions, 0,
+        "normalizeReadingMode: fractional page_positions cleared")
+    assert_nil(MangaMetadata.normalizeReadingMode(nil),
+        "normalizeReadingMode: nil input returns nil without crash")
+end
+
+-- ===========================================================================
+-- Test 16: repairMangaDirectory batch-migrates an existing legacy chapter
+--          (Fix 3 path: one call re-seeds + force-normalizes all chapters)
+-- ===========================================================================
+
+do
+    reset()
+    mock_lfs._mode = {
+        ["/manga"]                  = "directory",
+        ["/manga/Book One"]         = "directory",
+        ["/manga/Book One/Ch. 1.cbz"] = "file",
+    }
+    mock_lfs._dir["/manga/Book One"] = { "Ch. 1.cbz" }
+    FILES["/manga/Book One/Ch. 1.sdr/metadata.cbz.lua"] = [[return {
+        ["doc_props"] = {
+            ["title"] = "Ch. 1", ["series"] = "Book One", ["series_index"] = 1,
+        },
+        ["zoom_mode"] = "contentwidth",
+        ["normal_zoom_mode"] = "contentwidth",
+        ["inverse_reading_order"] = false,
+        ["kopt_page_scroll"] = 1,
+        ["flipping_scroll_mode"] = true,
+        ["page_positions"] = { 0.875, 0.766 },
+        ["suwayomi_chapter_id"] = "c1",
+        ["suwayomi_manga_id"] = "m1",
+    }]]
+
+    local ok = MangaMetadata.repairMangaDirectory("/manga/Book One", { title = "Book One" })
+    assert_true(ok, "repairMangaDirectory: returns true for a legacy chapter folder")
+
+    local sidecar = WROTE["/manga/Book One/Ch. 1.sdr/metadata.cbz.lua"]
+    assert_not_nil(sidecar, "repairMangaDirectory: sidecar was rewritten")
+    local meta = load_content(sidecar)
+    assert_not_nil(meta, "repairMangaDirectory: rewritten sidecar is valid Lua")
+    assert_eq(meta.zoom_mode, "page",
+        "repair migration: legacy contentwidth zoom → page")
+    assert_eq(meta.normal_zoom_mode, "page",
+        "repair migration: normal_zoom_mode contentwidth → page")
+    assert_eq(meta.inverse_reading_order, true,
+        "repair migration: inverse_reading_order enabled")
+    assert_eq(meta.kopt_page_scroll, 0,
+        "repair migration: kopt_page_scroll reset to 0")
+    assert_eq(meta.flipping_scroll_mode, false,
+        "repair migration: flipping_scroll_mode disabled")
+    assert_eq(#meta.page_positions, 0,
+        "repair migration: fractional page_positions cleared")
+    assert_eq(meta.suwayomi_chapter_id, "c1",
+        "repair migration: chapter ID still present after rewrite")
 end
 
 -- ===========================================================================

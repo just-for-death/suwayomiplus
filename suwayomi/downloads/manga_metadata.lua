@@ -262,6 +262,49 @@ end
 -- Public API
 -- ---------------------------------------------------------------------------
 
+-- KOReader reading-mode defaults for manga downloaded by this plugin. Without
+-- preset metadata, KOReader opens CBZ/PDFs in "contentwidth" zoom, which scales
+-- a ~1.435:1 manga page to the Kindle's 1.33:1 screen and slices the bottom off
+-- into vertical scroll splits (webtoon-like: tapping scrolls within the page).
+-- Fit the whole page (1 tap = 1 page) and page right-to-left (Japanese manga).
+local MANGA_READING_MODE_VALUES = {
+    zoom_mode             = "page",
+    normal_zoom_mode      = "page",
+    inverse_reading_order = true,
+    kopt_page_scroll      = 0,
+    flipping_scroll_mode  = false,
+}
+
+-- Force-normalize a KOReader sidecar table to true manga reading mode and clear
+-- any fractional scroll positions left over from the webtoon-like behavior.
+-- Unlike the pre-seed-only-of-nil writeChapterMetadata behavior, this
+-- overwrites legacy lock-in values, which is what a batch migration needs.
+function MangaMetadata.normalizeReadingMode(metadata)
+    if type(metadata) ~= "table" then
+        return metadata
+    end
+    for key, value in pairs(MANGA_READING_MODE_VALUES) do
+        metadata[key] = value
+    end
+    if type(metadata.page_positions) == "table" and next(metadata.page_positions) ~= nil then
+        metadata.page_positions = {}
+    end
+    return metadata
+end
+
+-- Migrate one chapter's sidecar to manga reading mode (Fix 3). This is the
+-- programmatic, repeatable equivalent of the hand-edited batch migration that
+-- replaced "contentwidth" zoom, enabled right-to-left paging, and cleared the
+-- fractional page_positions on every existing chapter.
+function MangaMetadata.repairMangaReadingMode(path)
+    if not path or path == "" then
+        return false
+    end
+    local metadata = loadLuaTable(getMetadataPath(path))
+    MangaMetadata.normalizeReadingMode(metadata)
+    return saveLuaTable(getMetadataPath(path), metadata)
+end
+
 -- Writes a KOReader doc_props metadata file for a downloaded chapter CBZ.
 -- Merges into any existing sidecar so reader progress / annotations are kept.
 --
@@ -496,6 +539,7 @@ function MangaMetadata.repairMangaDirectory(manga_dir, manga, credentials)
                     artist = manga.artist,
                 }
                 MangaMetadata.writeChapterMetadata(path, manga, chapter)
+                MangaMetadata.repairMangaReadingMode(path)
                 MangaMetadata.clearBookInfoCache(path)
             end
         end
