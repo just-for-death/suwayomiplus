@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.3.20
+
+- Pre-seed fit-to-page zoom and right-to-left reading order on every newly downloaded chapter, so manga opens as a true single-page layout by default.
+- Force-normalize existing sidecars via `normalizeReadingMode()` and `repairMangaReadingMode()` to clear legacy webtoon-like fractional scroll positions.
+- Add `tools/migrate_manga_reading_mode.lua` — recursive idempotent batch migration script to reset all downloaded chapter sidecars to manga reading mode.
+- `repairMangaDirectory()` now also calls `repairMangaReadingMode()` so directory repairs reset reading mode.
+
 ## v1.3.19
 
 - Add long-press / hold gesture on manga cards in Manga Library to open the manga quick action menu.
