@@ -237,16 +237,17 @@ do
 end
 
 -- ===========================================================================
--- Test 10: getChapterFilenames includes id-based name first (most specific)
---          and the plain name as a fallback candidate
+-- Test 10: getChapterFilenames uses book-like "Ch. NNN - Name [id]" primary
+--          and keeps plain/legacy names as fallback candidates
 -- ===========================================================================
 
 do
     local chapter = { id = "999", name = "Chapter 5", chapter_number = 5, source_order = 50 }
     local names = SuwayomiPaths.getChapterFilenames(chapter)
     assert_true(#names >= 2, "getChapterFilenames: at least 2 candidates returned")
-    -- The primary (id-based) filename must come first.
-    -- Format: "<name> [id-<id>].cbz"  (plain substring search, no regex escaping)
+    -- Primary book-like filename sorts in the manga folder.
+    assert_true(names[1]:find("Ch. 005", 1, true) ~= nil,
+        "getChapterFilenames: primary filename starts with Ch. 005")
     assert_true(names[1]:find("[id-999]", 1, true) ~= nil,
         "getChapterFilenames: id-based filename is first candidate")
     -- The plain name without ID must also be present

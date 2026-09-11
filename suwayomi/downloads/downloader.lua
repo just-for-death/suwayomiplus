@@ -16,19 +16,39 @@ local SuwayomiPaths = require("suwayomi/paths")
 local Downloader = {}
 local DOWNLOAD_RETRY_DELAYS_SECONDS = { 0.5, 1 }
 
--- Write KOReader sidecar metadata after a successful chapter download so
--- the chapter appears with proper manga/series info in KOReader's library.
--- Uses pcall throughout so a metadata failure never aborts the download.
+-- Write KOReader sidecar metadata + manga-folder book index after a successful
+-- chapter download. Uses pcall throughout so metadata failure never aborts download.
 local function tryWriteChapterMetadata(final_path, manga, chapter)
     if not final_path or final_path == "" or not manga or not chapter then
         return
     end
     local ok, MangaMetadata = pcall(require, "suwayomi/downloads/manga_metadata")
-    if ok and MangaMetadata and MangaMetadata.writeChapterMetadata then
+    if not (ok and MangaMetadata) then
+        return
+    end
+    if MangaMetadata.writeChapterMetadata then
         pcall(function()
             MangaMetadata.writeChapterMetadata(final_path, manga, chapter)
         end)
     end
+    local manga_dir = tostring(final_path):match("^(.*)/[^/]+$")
+    if manga_dir and MangaMetadata.upsertMangaIndexChapter then
+        pcall(function()
+            MangaMetadata.upsertMangaIndexChapter(manga_dir, manga, chapter, final_path)
+        end)
+    end
+end
+
+-- Copy the manga folder cover from the thumbnail cache after a successful
+-- chapter download. Idempotent — skips if .cover.jpg already exists.
+local function tryWriteMangaCover(manga_dir, manga, credentials)
+    if not manga_dir or not manga then return end
+    pcall(function()
+        local ok_mm, MM = pcall(require, "suwayomi/downloads/manga_metadata")
+        if ok_mm and MM and MM.writeMangaCover then
+            MM.writeMangaCover(manga_dir, manga, credentials)
+        end
+    end)
 end
 
 -- Large chapters routinely take minutes over a remote link; the per-request
@@ -763,6 +783,8 @@ function Downloader:downloadChapter(credentials, download_directory, manga, chap
     if direct_result then
         if direct_result.ok and direct_result.path then
             tryWriteChapterMetadata(direct_result.path, manga, chapter)
+            local manga_dir = direct_result.path:match("^(.*)/[^/]+$")
+            tryWriteMangaCover(manga_dir, manga, credentials)
         end
         return direct_result
     end
@@ -771,6 +793,8 @@ function Downloader:downloadChapter(credentials, download_directory, manga, chap
     if not start_result.ok or start_result.skipped then
         if start_result.ok and start_result.path then
             tryWriteChapterMetadata(start_result.path, manga, chapter)
+            local manga_dir = start_result.path:match("^(.*)/[^/]+$")
+            tryWriteMangaCover(manga_dir, manga, credentials)
         end
         return start_result
     end
@@ -786,6 +810,8 @@ function Downloader:downloadChapter(credentials, download_directory, manga, chap
     local final_path = (result and result.path) or start_result.path
     if final_path then
         tryWriteChapterMetadata(final_path, manga, chapter)
+        local manga_dir = final_path:match("^(.*)/[^/]+$")
+        tryWriteMangaCover(manga_dir, manga, credentials)
     end
     return { ok = true, skipped = result and result.skipped, path = final_path }
 end
@@ -795,6 +821,8 @@ function Downloader:downloadChapterWithProgress(credentials, download_directory,
     if direct_result then
         if direct_result.ok and direct_result.path then
             tryWriteChapterMetadata(direct_result.path, manga, chapter)
+            local manga_dir = direct_result.path:match("^(.*)/[^/]+$")
+            tryWriteMangaCover(manga_dir, manga, credentials)
         end
         self:writeProgress(
             progress_path,
@@ -811,6 +839,8 @@ function Downloader:downloadChapterWithProgress(credentials, download_directory,
     if not start_result.ok or start_result.skipped then
         if start_result.ok and start_result.path then
             tryWriteChapterMetadata(start_result.path, manga, chapter)
+            local manga_dir = start_result.path:match("^(.*)/[^/]+$")
+            tryWriteMangaCover(manga_dir, manga, credentials)
         end
         self:writeProgress(
             progress_path,
@@ -842,6 +872,8 @@ function Downloader:downloadChapterWithProgress(credentials, download_directory,
     local final_path = (result and result.path) or start_result.path
     if final_path then
         tryWriteChapterMetadata(final_path, manga, chapter)
+        local manga_dir = final_path:match("^(.*)/[^/]+$")
+        tryWriteMangaCover(manga_dir, manga, credentials)
     end
     return { ok = true, skipped = result and result.skipped, path = final_path }
 end

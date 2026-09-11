@@ -133,8 +133,8 @@ end
 local MangaMetadata = dofile(MODULE_PATH)
 
 -- ===========================================================================
--- Test 1: writeChapterMetadata produces the correct doc_props.title format
---         "Ch. 00001.0 - Chapter Name" for chapter_number = 1
+-- Test 1: writeChapterMetadata produces chapter-only title for book model
+--         "Ch. 1 - Chapter Name" with series = manga title
 -- ===========================================================================
 
 do
@@ -145,12 +145,14 @@ do
     assert_true(ok, "writeChapterMetadata: returns true on success")
     local meta = load_content(io_cap.content)
     assert_not_nil(meta, "writeChapterMetadata: written content is valid Lua")
-    assert_eq(meta.doc_props.title, "Ch. 001.0 - Chapter Name",
-        "doc_props.title: integer chapter_number → %05.1f format (width=5) with .0 suffix")
+    assert_eq(meta.doc_props.title, "Ch. 1 - Chapter Name",
+        "doc_props.title: chapter-only title (manga lives in series)")
+    assert_eq(meta.doc_props.series, "My Manga",
+        "doc_props.series: manga title is the book/series name")
 end
 
 -- ===========================================================================
--- Test 2: decimal chapter_number (1.5) → "Ch. 00001.5 - Special"
+-- Test 2: decimal chapter_number (1.5) → "Ch. 1.5 - Special"
 -- ===========================================================================
 
 do
@@ -160,12 +162,12 @@ do
     MangaMetadata.writeChapterMetadata("/manga/Ch1.5.cbz", manga, chapter)
     local meta = load_content(io_cap.content)
     assert_not_nil(meta, "decimal chapter: written content is valid Lua")
-    assert_eq(meta.doc_props.title, "Ch. 001.5 - Special",
-        "doc_props.title: decimal chapter_number formatted correctly (%05.1f width=5)")
+    assert_eq(meta.doc_props.title, "Ch. 1.5 - Special",
+        "doc_props.title: decimal chapter_number formatted cleanly")
 end
 
 -- ===========================================================================
--- Test 3: nil chapter_number → falls back to chapter.name verbatim
+-- Test 3: nil chapter_number → falls back to chapter name only
 -- ===========================================================================
 
 do
@@ -176,7 +178,7 @@ do
     local meta = load_content(io_cap.content)
     assert_not_nil(meta, "nil chapter_number: written content is valid Lua")
     assert_eq(meta.doc_props.title, "Prologue",
-        "doc_props.title: nil chapter_number → chapter.name verbatim")
+        "doc_props.title: nil chapter_number → chapter name only")
 end
 
 -- ===========================================================================

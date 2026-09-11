@@ -76,13 +76,32 @@ function MangaMetadata.writeChapterMetadata(path, manga, chapter)
         return false
     end
 
-    -- Build a human-readable chapter title: "Ch. 001.0 - Chapter Name"
+    -- Build a clean chapter number string (no ugly zero-padding)
     local chapter_num = tonumber(chapter.chapter_number)
-    local chapter_title
+    local ch_num_str
     if chapter_num then
-        chapter_title = string.format("Ch. %05.1f - %s", chapter_num, chapter.name or "")
+        if chapter_num == math.floor(chapter_num) then
+            ch_num_str = tostring(math.floor(chapter_num))  -- "1", "42", "100"
+        else
+            ch_num_str = string.format("%.1f", chapter_num)  -- "1.5", "10.5"
+        end
+    end
+
+    -- Chapter title only — manga name lives in `series` so KOReader treats the
+    -- folder as one book and each CBZ as a chapter of that book.
+    -- Examples: "Ch. 1 - Romance Dawn", "Ch. 1.5 - Special", "Prologue"
+    local chapter_title
+    local ch_name = tostring(chapter.name or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    if ch_num_str then
+        if ch_name ~= "" then
+            chapter_title = string.format("Ch. %s - %s", ch_num_str, ch_name)
+        else
+            chapter_title = string.format("Ch. %s", ch_num_str)
+        end
+    elseif ch_name ~= "" then
+        chapter_title = ch_name
     else
-        chapter_title = chapter.name or tostring(chapter.id or "Unknown Chapter")
+        chapter_title = tostring(chapter.id or "Unknown Chapter")
     end
 
     -- Combine author and artist, deduplicating when they are the same person.
@@ -97,13 +116,13 @@ function MangaMetadata.writeChapterMetadata(path, manga, chapter)
     end
     local authors_str = #authors > 0 and table.concat(authors, ", ") or nil
 
-    -- doc_props sub-table: consumed by KOReader's metadata system.
+    -- doc_props: series = manga (the "book"), title = chapter, series_index = order
     local doc_props = {
-        title = chapter_title,
-        series = manga.title or "",
-        series_index = chapter_num or 0,
-        authors = authors_str,
-        description = manga.description,
+        title        = chapter_title,          -- "Ch. 1 - Romance Dawn"
+        series       = manga.title or "",      -- "One Piece" (KOReader series / book name)
+        series_index = chapter_num or 0,       -- 1
+        authors      = authors_str,
+        description  = manga.description,
     }
 
     -- Serialize the full metadata table, including extended fields that the
@@ -190,6 +209,111 @@ function MangaMetadata.writeMangaIndex(manga_dir, manga, chapters)
         return true
     end
     return false
+end
+
+-- Upsert one chapter into .manga_index.lua so the manga folder stays a navigable
+-- "book with chapters" after every download without rebuilding from scratch.
+function MangaMetadata.upsertMangaIndexChapter(manga_dir, manga, chapter, path)
+    if not manga_dir or manga_dir == "" then
+        return false
+    end
+    manga = type(manga) == "table" and manga or {}
+    chapter = type(chapter) == "table" and chapter or {}
+
+    local chapters = {}
+    local index_path = manga_dir .. "/.manga_index.lua"
+    local existing = io.open(index_path, "r")
+    if existing then
+        local content = existing:read("*a") or ""
+        existing:close()
+        local loader = loadstring(content)
+        if loader then
+            setfenv(loader, {})
+            local ok, data = pcall(loader)
+            if ok and type(data) == "table" and type(data.chapters) == "table" then
+                for _, entry in ipairs(data.chapters) do
+                    if type(entry) == "table" then
+                        chapters[#chapters + 1] = {
+                            chapter = {
+                                id = entry.id,
+                                name = entry.name,
+                                chapter_number = entry.number,
+                                source_order = entry.source_order or entry.number,
+                            },
+                            path = entry.path,
+                        }
+                    end
+                end
+            end
+        end
+    end
+
+    local chapter_id = tostring(chapter.id or "")
+    local replaced = false
+    for i, entry in ipairs(chapters) do
+        local existing_id = entry.chapter and tostring(entry.chapter.id or "") or ""
+        if chapter_id ~= "" and existing_id == chapter_id then
+            chapters[i] = { chapter = chapter, path = path }
+            replaced = true
+            break
+        end
+    end
+    if not replaced then
+        chapters[#chapters + 1] = { chapter = chapter, path = path }
+    end
+
+    return MangaMetadata.writeMangaIndex(manga_dir, manga, chapters)
+end
+
+-- Writes a .cover.jpg into the manga folder by copying from the thumbnail cache.
+-- Skipped when the file already exists to avoid redundant I/O on every download.
+--
+-- manga_dir   : directory containing all chapter CBZs for this manga
+-- manga       : manga table {id, title, thumbnail_url, ...}
+-- credentials : Suwayomi auth credentials (passed through to thumbnail_cache)
+function MangaMetadata.writeMangaCover(manga_dir, manga, credentials)
+    if not manga_dir or manga_dir == "" then return false end
+    manga = type(manga) == "table" and manga or {}
+    local cover_dest = manga_dir .. "/.cover.jpg"
+
+    -- Check if cover already exists
+    local ok_lfs, lfs = pcall(require, "suwayomi/fs")
+    if ok_lfs and lfs and lfs.attributes(cover_dest, "mode") == "file" then
+        return true  -- already have a cover
+    end
+
+    -- Find cached thumbnail
+    local thumb_url = manga.thumbnail_url
+    if not thumb_url or thumb_url == "" then return false end
+
+    local ok_tc, tc = pcall(require, "suwayomi/ui/thumbnail_cache")
+    if not ok_tc or not tc then return false end
+
+    local variants = {
+        { variant = "manga_cover", width = 64, height = 96 },
+        { variant = "poster", width = 240, height = 360 },
+        { variant = "thumbnail" },
+    }
+
+    local src_path
+    for _, opts in ipairs(variants) do
+        local p = tc.find(credentials, thumb_url, opts)
+        if p then src_path = p; break end
+    end
+    if not src_path then return false end
+
+    -- Copy raw image bytes to cover destination
+    local src = io.open(src_path, "rb")
+    if not src then return false end
+    local data = src:read("*a")
+    src:close()
+    if not data or #data == 0 then return false end
+
+    local dst = io.open(cover_dest, "wb")
+    if not dst then return false end
+    dst:write(data)
+    dst:close()
+    return true
 end
 
 return MangaMetadata

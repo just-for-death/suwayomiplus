@@ -102,6 +102,21 @@ function SuwayomiPaths.getChapterFilename(chapter)
     return SuwayomiPaths.getChapterFilenames(chapter)[1]
 end
 
+local function formatChapterSortPrefix(chapter)
+    local num = chapter and tonumber(chapter.chapter_number)
+    if num then
+        if num == math.floor(num) then
+            return string.format("Ch. %03d", math.floor(num))
+        end
+        return string.format("Ch. %05.1f", num)
+    end
+    local order = chapter and tonumber(chapter.source_order)
+    if order then
+        return string.format("Ch. %03d", math.floor(order))
+    end
+    return nil
+end
+
 function SuwayomiPaths.getChapterFilenames(chapter)
     local name = SuwayomiPaths.sanitizePathSegment(chapter and chapter.name)
     local filenames = {}
@@ -110,29 +125,52 @@ function SuwayomiPaths.getChapterFilenames(chapter)
     local id = chapter and present(chapter.id)
     local source_order = chapter and present(chapter.source_order)
     local chapter_number = chapter and present(chapter.chapter_number)
+    local sort_prefix = formatChapterSortPrefix(chapter)
 
-    local function addStable(label, value)
+    local function addStable(label, value, base_name)
         if value then
-            appendUnique(filenames, seen, name .. " [" .. label .. "-" .. SuwayomiPaths.sanitizePathSegment(value) .. "].cbz")
+            appendUnique(
+                filenames,
+                seen,
+                (base_name or name) .. " [" .. label .. "-" .. SuwayomiPaths.sanitizePathSegment(value) .. "].cbz"
+            )
         end
     end
 
-    -- Keep current collision-safe target first, then recognize older local names.
+    -- Book-like primary name: "Ch. 001 - Romance Dawn [id-123].cbz"
+    -- Sorts naturally in the manga folder and stays unique via Suwayomi id.
+    local book_base = sort_prefix
+    if sort_prefix and name ~= "" and name ~= "untitled" then
+        book_base = sort_prefix .. " - " .. name
+    end
+    if book_base then
+        if id then
+            addStable("id", id, book_base)
+        elseif source_order then
+            addStable("order", source_order, book_base)
+        elseif chapter_number then
+            addStable("chapter", chapter_number, book_base)
+        else
+            appendUnique(filenames, seen, book_base .. ".cbz")
+        end
+    end
+
+    -- Older local names kept as lookup candidates for already-downloaded files.
     if id then
-        addStable("id", id)
+        addStable("id", id, name)
     elseif source_order then
-        addStable("order", source_order)
+        addStable("order", source_order, name)
     elseif chapter_number then
-        addStable("chapter", chapter_number)
+        addStable("chapter", chapter_number, name)
     end
 
     appendUnique(filenames, seen, plain)
 
     if id then
-        addStable("order", source_order)
-        addStable("chapter", chapter_number)
+        addStable("order", source_order, name)
+        addStable("chapter", chapter_number, name)
     elseif source_order then
-        addStable("chapter", chapter_number)
+        addStable("chapter", chapter_number, name)
     end
 
     return filenames
