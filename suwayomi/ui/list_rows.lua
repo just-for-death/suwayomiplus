@@ -44,6 +44,12 @@ function ListRows.getMangaMandatory(manga, options)
     if options.show_in_library == true and type(manga) == "table" and manga.in_library == true then
         table.insert(labels, I18n.t("In Library"))
     end
+    if options.show_unread_count == true and type(manga) == "table" then
+        local unread = tonumber(manga.unread_count)
+        if unread and unread > 0 then
+            table.insert(labels, I18n.count(unread, "%1 unread", "%1 unread"))
+        end
+    end
     if type(manga) == "table" then
         local chapter_count
         if type(manga.chapter_count_error) == "string" and manga.chapter_count_error ~= "" then

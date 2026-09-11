@@ -219,6 +219,7 @@ function Transport.performGraphQLRequest(credentials, request_body, operation_na
         }
     end
 
+    local WakeupGuard = require("suwayomi/network/wakeup_guard")
     local ltn12 = require("ltn12")
     local client
     if server_url:match("^https://") then
@@ -227,56 +228,8 @@ function Transport.performGraphQLRequest(credentials, request_body, operation_na
         client = require("socket.http")
     end
 
-    local response_chunks = {}
     local headers = Transport.buildRequestHeaders(credentials)
     headers["Content-Length"] = tostring(#request_body)
-
-    local started_at = now()
-    local ok, code = client.request{
-        url = Transport.buildGraphQLEndpoint(server_url),
-        method = "POST",
-        headers = headers,
-        source = ltn12.source.string(request_body),
-        sink = buildGuardedTableSink(response_chunks, {
-            max_bytes = MAX_GRAPHQL_RESPONSE_BYTES,
-        }),
-        timeout = options.timeout_seconds or REQUEST_TIMEOUT_SECONDS,
-    }
-
-    local response_body = table.concat(response_chunks)
-    local finished_at = now()
-    logDebugEvent(log_debug_event, {
-        operation = operation_name,
-        event = "response",
-        ok = ok,
-        code = code,
-        code_type = type(code),
-        elapsed_ms = math.floor(((finished_at - started_at) * 1000) + 0.5),
-        request_bytes = #request_body,
-        response_bytes = #response_body,
-    })
-    if code == 200 then
-        return {
-            ok = true,
-            response_body = response_body,
-        }
-    end
-
-    if not ok then
-        logDebugEvent(log_debug_event, { operation = operation_name, event = "transport_failure", error = code })
-        return {
-            ok = false,
-            error = formatReachabilityError(code),
-        }
-    end
-
-    if type(code) ~= "number" then
-        logDebugEvent(log_debug_event, { operation = operation_name, event = "non_numeric_status", code = code })
-        return {
-            ok = false,
-            error = formatReachabilityError(code),
-        }
-    end
 
     local error_message = {
         [401] = "Authentication failed.",
@@ -284,10 +237,88 @@ function Transport.performGraphQLRequest(credentials, request_body, operation_na
         [404] = "Suwayomi GraphQL endpoint not found.",
     }
 
-    logDebugEvent(log_debug_event, { operation = operation_name, event = "http_status", code = code })
-    return {
+    local max_attempts = WakeupGuard.getMaxRetries()
+    local last_retryable_result
+
+    for attempt = 1, max_attempts do
+        local response_chunks = {}
+        local started_at = now()
+        local ok, code = client.request{
+            url = Transport.buildGraphQLEndpoint(server_url),
+            method = "POST",
+            headers = headers,
+            source = ltn12.source.string(request_body),
+            sink = buildGuardedTableSink(response_chunks, {
+                max_bytes = MAX_GRAPHQL_RESPONSE_BYTES,
+            }),
+            timeout = options.timeout_seconds or REQUEST_TIMEOUT_SECONDS,
+        }
+
+        local response_body = table.concat(response_chunks)
+        local finished_at = now()
+        logDebugEvent(log_debug_event, {
+            operation = operation_name,
+            event = "response",
+            ok = ok,
+            code = code,
+            code_type = type(code),
+            attempt = attempt,
+            elapsed_ms = math.floor(((finished_at - started_at) * 1000) + 0.5),
+            request_bytes = #request_body,
+            response_bytes = #response_body,
+        })
+
+        if code == 200 then
+            WakeupGuard.recordSuccess()
+            return {
+                ok = true,
+                response_body = response_body,
+            }
+        end
+
+        if not ok and isRetryableTransportCode(code) then
+            logDebugEvent(log_debug_event, {
+                operation = operation_name,
+                event = "transport_failure",
+                error = code,
+                attempt = attempt,
+                retrying = attempt < max_attempts,
+            })
+            last_retryable_result = {
+                ok = false,
+                error = formatReachabilityError(code),
+            }
+            if attempt < max_attempts then
+                local delay = WakeupGuard.getReconnectDelay()
+                local ok_socket, socket_lib = pcall(require, "socket")
+                if ok_socket and socket_lib and socket_lib.sleep then
+                    socket_lib.sleep(delay)
+                end
+            end
+        elseif not ok then
+            logDebugEvent(log_debug_event, { operation = operation_name, event = "transport_failure", error = code })
+            return {
+                ok = false,
+                error = formatReachabilityError(code),
+            }
+        elseif type(code) ~= "number" then
+            logDebugEvent(log_debug_event, { operation = operation_name, event = "non_numeric_status", code = code })
+            return {
+                ok = false,
+                error = formatReachabilityError(code),
+            }
+        else
+            logDebugEvent(log_debug_event, { operation = operation_name, event = "http_status", code = code })
+            return {
+                ok = false,
+                error = error_message[code] or "Could not reach the Suwayomi server.",
+            }
+        end
+    end
+
+    return last_retryable_result or {
         ok = false,
-        error = error_message[code] or "Could not reach the Suwayomi server.",
+        error = "Could not reach the Suwayomi server.",
     }
 end
 

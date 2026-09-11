@@ -40,6 +40,13 @@ end
 function Methods:buildHomeActions()
     return {
         {
+            id = "continue_reading",
+            text = I18n.t("Continue Reading"),
+            callback = function()
+                self:continueReading()
+            end,
+        },
+        {
             id = "library",
             text = I18n.t("Library"),
             callback = function()

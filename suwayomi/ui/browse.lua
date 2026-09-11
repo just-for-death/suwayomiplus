@@ -992,6 +992,7 @@ end
 local function buildLibraryMangaMenuTable(manga_list, onSelectCallback)
     return ListRows.buildMangaMenuTable(manga_list, {
         show_in_library = false,
+        show_unread_count = true,
         on_select = onSelectCallback,
     })
 end

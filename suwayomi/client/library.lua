@@ -8,6 +8,18 @@
 local M = {}
 local I18n = require("suwayomi/i18n")
 
+local function sortLibraryMangaByUnread(manga_list)
+    local sorted = {}
+    for _, m in ipairs(manga_list) do sorted[#sorted + 1] = m end
+    table.sort(sorted, function(a, b)
+        local ua = tonumber(a.unread_count) or 0
+        local ub = tonumber(b.unread_count) or 0
+        if ua ~= ub then return ua > ub end
+        return (a.title or "") < (b.title or "")
+    end)
+    return sorted
+end
+
 function M.install(SuwayomiClient)
 function SuwayomiClient:mangaBelongsToCategory(manga, category)
     if not category or not category.id then
@@ -130,6 +142,7 @@ function SuwayomiClient:showLibraryMangaResult(category, credentials, result)
     end
 
     local manga = self:filterLibraryMangaByCategory(result.manga or {}, category)
+    manga = sortLibraryMangaByUnread(manga)
     self:log({
         operation = "showLibrary",
         event = "library_manga_loaded",

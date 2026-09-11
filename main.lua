@@ -34,6 +34,7 @@ local ChapterStream = require("suwayomi/stream")
 local ChapterCacheReader = require("suwayomi/cache_reader")
 local MangaTrackers = require("suwayomi/trackers")
 local FeedController = require("suwayomi/plugin/feed")
+local ContinueReadingController = require("suwayomi/plugin/continue_reading")
 local I18n = require("suwayomi/i18n")
 
 local SuwayomiPlugin = WidgetContainer:extend{
@@ -288,6 +289,16 @@ function SuwayomiPlugin:init()
             end)
         end)
     end
+    -- Register Suwayomi home-screen modules with SimpleUI if installed.
+    UIManager:scheduleIn(1, function()
+        pcall(function()
+            local ok, Registry = pcall(require, "desktop_modules/moduleregistry")
+            if ok and Registry and Registry.register then
+                Registry.register("desktop_modules/module_suwayomi_library")
+                SuwayomiDebug.log({ operation = "plugin_init", event = "simpleui_library_module_registered" })
+            end
+        end)
+    end)
     SuwayomiDebug.log({ operation = "plugin_init", event = "end" })
 end
 
@@ -311,6 +322,7 @@ local CONTROLLER_MODULES = {
     ChapterCacheReader,
     MangaTrackers,
     FeedController,
+    ContinueReadingController,
 }
 
 -- Method installation keeps KOReader callback names stable while moving feature logic into documented modules.
